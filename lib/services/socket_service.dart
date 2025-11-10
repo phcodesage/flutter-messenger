@@ -24,6 +24,7 @@ class SocketService {
   Function(Map<String, dynamic>)? onMessageRead;
   Function(Map<String, dynamic>)? onColorChanged;
   Function(Map<String, dynamic>)? onColorReset;
+  Function(Map<String, dynamic>)? onAllMessagesDeleted;
 
   bool get isConnected => _socket?.connected ?? false;
   int? get currentUserId => _currentUserId;
@@ -198,6 +199,12 @@ class SocketService {
       debugPrint('✓✓ Message read: $data');
       onMessageRead?.call(data as Map<String, dynamic>);
     });
+
+    // All messages deleted event
+    _socket!.on('all_messages_deleted', (data) {
+      debugPrint('📭 All messages deleted: $data');
+      onAllMessagesDeleted?.call(data as Map<String, dynamic>);
+    });
   }
 
   /// Disconnect from Socket.IO server
@@ -291,5 +298,7 @@ class SocketService {
     onMessageDelivered = null;
     onMessageRead = null;
     onColorChanged = null;
+    onColorReset = null;
+    onAllMessagesDeleted = null;
   }
 }

@@ -158,6 +158,11 @@ class _ChatScreenState extends State<ChatScreen> {
         _handleColorReset(data);
       }
     };
+
+    // Listen for all messages deleted event
+    _socketService.onAllMessagesDeleted = (data) {
+      _handleAllMessagesDeleted(data);
+    };
   }
 
   void _handleColorChange(Map<String, dynamic> data) {
@@ -238,7 +243,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages.insert(0, resetMessage);
     });
 
-    // Scroll to bottom to show the message
+    // Scroll to bottom to show the notification
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom();
     });
@@ -293,6 +298,52 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom();
     });
+  }
+
+  void _handleAllMessagesDeleted(Map<String, dynamic> data) {
+    debugPrint('🗑️ Handling all messages deleted event: $data');
+    
+    final String deletedRoom = data['room'] ?? '';
+    
+    // Validate room ID
+    if (deletedRoom.isEmpty) {
+      debugPrint('⚠️ Warning: Received delete event with no room ID');
+      return;
+    }
+    
+    // Generate current room ID (same format as backend: chat_{userId1}_{userId2} sorted)
+    if (_currentUserId == null) {
+      debugPrint('⚠️ Warning: Current user ID is null');
+      return;
+    }
+    
+    final List<int> userIds = [_currentUserId!, widget.otherUser.id];
+    userIds.sort();
+    final currentRoomId = 'chat_${userIds[0]}_${userIds[1]}';
+    
+    // Only clear messages if the event is for the current room
+    if (deletedRoom != currentRoomId) {
+      debugPrint('ℹ️ Ignoring delete event for different room: $deletedRoom (current: $currentRoomId)');
+      return;
+    }
+    
+    // Clear all messages
+    setState(() {
+      _messages.clear();
+    });
+
+    // Show a snackbar notification
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('All messages have been deleted'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+
+    debugPrint('✅ Messages cleared for room: $currentRoomId');
   }
 
   Future<void> _loadMessages() async {
@@ -581,7 +632,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputFocusNode.dispose();
     _typingTimer?.cancel();
     _typingUpdateThrottle?.cancel();
-    _stopTyping();
+    
+    // Send typing stop without setState (widget is being disposed)
+    _socketService.stopTyping(widget.otherUser.id);
     
     // Leave chat room
     _socketService.leaveChat(widget.otherUser.id);
@@ -600,7 +653,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      resizeToAvoidBottomInset: true,
+      resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFF1A1A1A),
       appBar: AppBar(
         backgroundColor: _headerColor,
@@ -657,11 +710,12 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: const [],
       ),
-      body: Column(
-        mainAxisSize: MainAxisSize.max,
+      body: Stack(
         children: [
-          // Messages list
-          Expanded(
+          Column(
+            children: [
+              // Messages list
+              Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _messages.isEmpty
@@ -722,7 +776,12 @@ class _ChatScreenState extends State<ChatScreen> {
           // Message input
           RepaintBoundary(
             child: Container(
-              padding: const EdgeInsets.all(12),
+              padding: EdgeInsets.only(
+                left: 12,
+                right: 12,
+                top: 12,
+                bottom: 12 + MediaQuery.of(context).viewInsets.bottom,
+              ),
               decoration: const BoxDecoration(
                 color: Color(0xFF2D2D2D),
                 border: Border(
@@ -804,15 +863,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                // Action buttons - Grid layout (hidden when keyboard is visible)
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeInOut,
-                  child: !_isKeyboardVisible
-                    ? Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
+                // Action buttons - Grid layout (hidden when typing)
+                if (_messageController.text.isEmpty)
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
                     // Ring Doorbell
                     ElevatedButton(
                       onPressed: _ringDoorbell,
@@ -933,13 +989,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: const Text('Export Chat'),
                     ),
                   ],
-                )
-                    : const SizedBox.shrink(),
                 ),
               ],
             ),
           ),
-        ),
+          ),
+            ],
+          ),
         ],
       ),
     );

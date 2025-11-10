@@ -123,7 +123,7 @@ def send_doorbell_notification(fcm_token, sender_name, sender_id):
     """Send notification for doorbell ring"""
     return send_push_notification(
         fcm_token=fcm_token,
-        title=f"🔔 {sender_name} is calling",
+        title=f"🔔 {sender_name} rang your doorbell",
         body="Tap to open chat",
         data={
             'type': 'doorbell',
