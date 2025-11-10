@@ -5,6 +5,8 @@ import '../config/api_config.dart';
 import '../models/auth_response.dart';
 import '../models/user.dart';
 import 'storage_service.dart';
+import 'socket_service.dart';
+import 'presence_service.dart';
 
 /// Service for handling authentication API calls
 class AuthService {
@@ -36,6 +38,15 @@ class AuthService {
         await StorageService.saveToken(authResponse.token);
         await StorageService.saveUserId(authResponse.user.id);
         await StorageService.saveUsername(authResponse.user.username);
+        
+        // Initialize Socket.IO connection
+        SocketService().initialize(authResponse.token, authResponse.user.id);
+        
+        // Start heartbeat to maintain online status
+        PresenceService().startHeartbeat();
+        
+        // Set status to online
+        await PresenceService.updateStatus('online');
         
         return authResponse;
       } else {
@@ -71,6 +82,15 @@ class AuthService {
         await StorageService.saveUserId(authResponse.user.id);
         await StorageService.saveUsername(authResponse.user.username);
         
+        // Initialize Socket.IO connection
+        SocketService().initialize(authResponse.token, authResponse.user.id);
+        
+        // Start heartbeat to maintain online status
+        PresenceService().startHeartbeat();
+        
+        // Set status to online
+        await PresenceService.updateStatus('online');
+        
         return authResponse;
       } else {
         final error = jsonDecode(response.body);
@@ -85,6 +105,15 @@ class AuthService {
   /// Logout user
   static Future<void> logout() async {
     try {
+      // Set status to offline before logout
+      await PresenceService.updateStatus('offline');
+      
+      // Stop heartbeat
+      PresenceService().stopHeartbeat();
+      
+      // Disconnect Socket.IO
+      SocketService().disconnect();
+      
       final token = await StorageService.getToken();
       
       if (token != null) {

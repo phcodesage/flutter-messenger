@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/firebase_messaging_service.dart';
+import '../services/fcm_service.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/app_text_field.dart';
 import '../widgets/password_field.dart';
@@ -70,6 +72,12 @@ class _RegisterPageState extends State<RegisterPage> {
         firstName: firstName,
         lastName: lastName.isNotEmpty ? lastName : null,
       );
+      
+      // Send FCM token to backend after successful registration
+      final fcmToken = FirebaseMessagingService.instance.fcmToken;
+      if (fcmToken != null) {
+        await FCMService.updateFCMToken(fcmToken);
+      }
       
       if (mounted) {
         // Navigate to home screen

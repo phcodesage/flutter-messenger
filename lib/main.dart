@@ -1,11 +1,34 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+import 'screens/auth_check_screen.dart';
 import 'screens/sign_in_page.dart';
 import 'screens/register_page.dart';
 import 'screens/forgot_password_page.dart';
 import 'screens/home_page.dart';
 import 'screens/lobby_screen.dart';
+import 'services/firebase_messaging_service.dart';
+import 'services/fcm_service.dart';
+import 'utils/notification_handler.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  
+  // Initialize Firebase Cloud Messaging
+  await FirebaseMessagingService.instance.initialize();
+  
+  // Set up notification tap handler
+  FirebaseMessagingService.instance.onNotificationTapped = (data) {
+    NotificationHandler.handleNotificationTap(data);
+  };
+  
+  // Note: FCM token will be sent to backend after successful login
+  
   runApp(const MessengerApp());
 }
 
@@ -43,8 +66,9 @@ class MessengerApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter Messenger',
       debugShowCheckedModeBanner: false,
+      navigatorKey: NotificationHandler.navigatorKey,
       theme: baseTheme,
-      home: const SignInPage(),
+      home: const AuthCheckScreen(),
       routes: {
         SignInPage.route: (_) => const SignInPage(),
         RegisterPage.route: (_) => const RegisterPage(),

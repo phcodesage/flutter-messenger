@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../models/lobby_user.dart';
 import '../services/lobby_service.dart';
 import '../services/auth_service.dart';
+import '../services/socket_service.dart';
 import 'sign_in_page.dart';
+import 'chat_screen.dart';
 
 /// Lobby/Chat list screen
 class LobbyScreen extends StatefulWidget {
@@ -18,6 +20,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
   List<LobbyUser> _filteredUsers = [];
   bool _isLoading = true;
   final TextEditingController _searchController = TextEditingController();
+  final SocketService _socketService = SocketService();
 
   // Avatar colors palette
   static const List<Color> avatarColors = [
@@ -38,11 +41,168 @@ class _LobbyScreenState extends State<LobbyScreen> {
     super.initState();
     _loadLobby();
     _searchController.addListener(_filterUsers);
+    _setupRealtimeListeners();
+  }
+
+  void _setupRealtimeListeners() {
+    // Listen for doorbell rings
+    _socketService.onDoorbellRing = (data) {
+      _handleDoorbellRing(data);
+    };
+
+    // Listen for new messages
+    _socketService.onMessageReceived = (data) {
+      _handleNewMessage(data);
+    };
+
+    // Listen for presence updates
+    _socketService.onPresenceUpdate = (data) {
+      _updateUserPresence(data);
+    };
+  }
+
+  void _handleDoorbellRing(Map<String, dynamic> data) {
+    final senderId = data['sender_id'] as int;
+    final senderName = data['sender_name'] as String;
+    
+    // Only show dialog if we're still on the lobby screen (not in a chat)
+    if (!mounted) return;
+    
+    // Find the user in the lobby
+    final user = _lobbyUsers.firstWhere(
+      (u) => u.id == senderId,
+      orElse: () => _lobbyUsers.first, // fallback
+    );
+
+    // Show doorbell notification only in lobby
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2D2D2D),
+        title: Row(
+          children: [
+            const Icon(Icons.notifications_active, color: Color(0xFFFFA726)),
+            const SizedBox(width: 8),
+            const Text('Doorbell Ring', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Text(
+          '$senderName is calling you!',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Dismiss'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // Clear doorbell listener before navigating to chat
+              _socketService.onDoorbellRing = null;
+              // Navigate to chat with this user
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChatScreen(otherUser: user),
+                ),
+              ).then((_) {
+                // Reload lobby and restore doorbell listener
+                _loadLobby();
+                _setupRealtimeListeners();
+              });
+            },
+            child: const Text('Answer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleNewMessage(Map<String, dynamic> data) {
+    final senderId = data['sender_id'] as int;
+    
+    // Update unread count for sender
+    setState(() {
+      final userIndex = _lobbyUsers.indexWhere((u) => u.id == senderId);
+      if (userIndex != -1) {
+        // Create updated user with incremented unread count
+        final user = _lobbyUsers[userIndex];
+        final updatedUser = LobbyUser(
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName: user.fullName,
+          avatarUrl: user.avatarUrl,
+          bio: user.bio,
+          status: user.status,
+          statusMessage: user.statusMessage,
+          lastSeen: user.lastSeen,
+          isOnline: user.isOnline,
+          isAdmin: user.isAdmin,
+          timezone: user.timezone,
+          unreadCount: user.unreadCount + 1,
+          isContact: user.isContact,
+          isAdminUser: user.isAdminUser,
+        );
+        
+        _lobbyUsers[userIndex] = updatedUser;
+        
+        // Move to top of list
+        _lobbyUsers.removeAt(userIndex);
+        _lobbyUsers.insert(0, updatedUser);
+        
+        // Update filtered list
+        _filterUsers();
+      }
+    });
+  }
+
+  void _updateUserPresence(Map<String, dynamic> data) {
+    final userId = data['user_id'] as int;
+    final status = data['status'] as String;
+    final isOnline = data['is_online'] as bool;
+    
+    setState(() {
+      final userIndex = _lobbyUsers.indexWhere((u) => u.id == userId);
+      if (userIndex != -1) {
+        final user = _lobbyUsers[userIndex];
+        final updatedUser = LobbyUser(
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName: user.fullName,
+          avatarUrl: user.avatarUrl,
+          bio: user.bio,
+          status: status,
+          statusMessage: user.statusMessage,
+          lastSeen: user.lastSeen,
+          isOnline: isOnline,
+          isAdmin: user.isAdmin,
+          timezone: user.timezone,
+          unreadCount: user.unreadCount,
+          isContact: user.isContact,
+          isAdminUser: user.isAdminUser,
+        );
+        
+        _lobbyUsers[userIndex] = updatedUser;
+        _filterUsers();
+      }
+    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    // Clear socket callbacks to prevent memory leaks
+    _socketService.onDoorbellRing = null;
+    _socketService.onMessageReceived = null;
+    _socketService.onPresenceUpdate = null;
     super.dispose();
   }
 
@@ -365,13 +525,16 @@ class _LobbyScreenState extends State<LobbyScreen> {
           ],
         ),
         onTap: () {
-          // TODO: Navigate to chat screen with this user
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Chat with ${user.fullName} - Coming soon!'),
-              duration: const Duration(seconds: 1),
+          // Navigate to chat screen
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatScreen(otherUser: user),
             ),
-          );
+          ).then((_) {
+            // Reload lobby when returning from chat to update unread counts
+            _loadLobby();
+          });
         },
       ),
     );

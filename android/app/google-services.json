@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "86462243467",
+    "project_id": "flutter-messaging-ee4ea",
+    "storage_bucket": "flutter-messaging-ee4ea.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:86462243467:android:c66ce05d9f83afb382aa8e",
+        "android_client_info": {
+          "package_name": "com.example.flutter_messenger"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8A3Iyb2s2p-WX9AXlCfnmj8b6c4civHE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -40,6 +40,17 @@ dependencies:
   
   # Local storage for tokens and user data
   shared_preferences: ^2.2.2
+  
+  # Socket.IO client for real-time features
+  socket_io_client: ^2.0.3+1
+  
+  # Audio player for sound effects
+  audioplayers: ^5.2.1
+  
+  # Firebase Cloud Messaging for push notifications
+  firebase_core: ^2.24.2
+  firebase_messaging: ^14.7.9
+  flutter_local_notifications: ^17.2.3
 
 dev_dependencies:
   flutter_test:
@@ -62,6 +73,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  assets:
+    - assets/sounds/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
