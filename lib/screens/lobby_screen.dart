@@ -472,6 +472,24 @@ class _LobbyScreenState extends State<LobbyScreen>
       _handleNewMessage(data);
     });
 
+    // Persistent call-log entries (declined / missed / answered) — update the
+    // conversation-list preview for both directions: an outgoing log (we were
+    // the caller) goes through the sent-message path, an incoming one through
+    // the new-message path (which also bumps unread, matching the web app).
+    _socketService.addListener('callLogMessage', key, (
+      Map<String, dynamic> data,
+    ) {
+      final senderId = _toInt(data['sender_id']);
+      final currentUserId = _socketService.currentUserId;
+      if (senderId != null &&
+          currentUserId != null &&
+          senderId == currentUserId) {
+        _handleSentMessage(data);
+      } else {
+        _handleNewMessage(data);
+      }
+    });
+
     // Listen for sent messages (outgoing from current user)
     _socketService.addListener('messageSent', key, (Map<String, dynamic> data) {
       _handleSentMessage(data);
@@ -3387,13 +3405,27 @@ class _LobbyScreenState extends State<LobbyScreen>
     final otherUserId = _extractOtherParticipantIdFromSessionState(data);
 
     final isTerminal = state == 'ended' || state == 'declined' || state == 'cancelled';
-    final isAcceptedByCurrentUserElsewhere =
+
+    // The current user is in an accepted call on ANOTHER device whenever this
+    // device isn't the one in the call. The actor of 'accepted' is whoever
+    // answered, which is the OTHER party when the current user is the caller —
+    // so requiring actorUserId == currentUserId only covered "answered on my
+    // other device" and missed "I called from my other device (e.g. web)".
+    final participantIds = data['participant_ids'];
+    final currentUserIsParticipant =
+        actorUserId == currentUserId ||
+        _toInt(data['caller_id']) == currentUserId ||
+        _toInt(data['callee_id']) == currentUserId ||
+        (participantIds is List &&
+            participantIds.map((e) => _toInt(e)).contains(currentUserId));
+
+    final isAcceptedForCurrentUserElsewhere =
         state == 'accepted' &&
-        actorUserId == currentUserId &&
+        currentUserIsParticipant &&
         otherUserId != null &&
         !PresenceService().isCallInProgress;
 
-    if (isAcceptedByCurrentUserElsewhere) {
+    if (isAcceptedForCurrentUserElsewhere) {
       setState(() {
         _crossDeviceActiveCallRoomByUserId[otherUserId] = roomId;
       });

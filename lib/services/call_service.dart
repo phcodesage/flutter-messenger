@@ -250,6 +250,12 @@ class CallService {
               .toLowerCase();
       if (state == 'accepted' || state == 'connected') {
         _consumeConnectedTimestamp(data, source: 'callSessionState:$state');
+      } else if (state == 'declined') {
+        debugPrint('❌ Received callSessionState: $state');
+        handleCallDeclined();
+      } else if (state == 'ended' || state == 'cancelled') {
+        debugPrint('📴 Received callSessionState: $state');
+        handleCallEnded();
       }
     });
   }
@@ -270,7 +276,8 @@ class CallService {
     }
 
     // If neither call_id nor room is present, accept while this service owns an active call.
-    return _callState == CallState.connecting || _callState == CallState.connected;
+    return _callState == CallState.connecting ||
+        _callState == CallState.connected;
   }
 
   int? _toInt(dynamic value) {
@@ -290,7 +297,8 @@ class CallService {
 
   void _setConnectedAt(DateTime connectedAtUtc, {required String source}) {
     final ms = connectedAtUtc.millisecondsSinceEpoch;
-    final didChange = _connectedAtMs == null || (_connectedAtMs! - ms).abs() > 999;
+    final didChange =
+        _connectedAtMs == null || (_connectedAtMs! - ms).abs() > 999;
 
     _connectedAt = connectedAtUtc;
     _connectedAtMs = ms;
@@ -305,8 +313,11 @@ class CallService {
     Map<String, dynamic> data, {
     required String source,
   }) {
-    final connectedAtMs =
-        _toInt(data['connected_at_ms'] ?? data['connectedAtMs'] ?? data['call_start_time']);
+    final connectedAtMs = _toInt(
+      data['connected_at_ms'] ??
+          data['connectedAtMs'] ??
+          data['call_start_time'],
+    );
     if (connectedAtMs != null && connectedAtMs > 0) {
       _setConnectedAt(
         DateTime.fromMillisecondsSinceEpoch(connectedAtMs, isUtc: true),
@@ -315,8 +326,9 @@ class CallService {
       return;
     }
 
-    final connectedAtIso =
-        _parseConnectedIso(data['connected_at'] ?? data['connectedAt'] ?? data['call_connected_at']);
+    final connectedAtIso = _parseConnectedIso(
+      data['connected_at'] ?? data['connectedAt'] ?? data['call_connected_at'],
+    );
     if (connectedAtIso != null) {
       _setConnectedAt(connectedAtIso, source: '$source(iso)');
     }
@@ -483,7 +495,10 @@ class CallService {
         _callState = CallState.connected;
         onCallStateChanged?.call(_callState);
         if (_connectedAt == null) {
-          _setConnectedAt(DateTime.now().toUtc(), source: 'ice-connected-fallback');
+          _setConnectedAt(
+            DateTime.now().toUtc(),
+            source: 'ice-connected-fallback',
+          );
         }
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         debugPrint('❌ ICE connection failed — ending call');
@@ -747,6 +762,19 @@ class CallService {
       case 'call_cancelled':
         debugPrint('📴 Received call termination signal: $type');
         handleCallEnded();
+        break;
+      case 'call-declined':
+      case 'call_declined':
+      case 'declined':
+      case 'decline':
+      case 'reject':
+      case 'rejected':
+        // Web peers decline via a 'call-declined' control signal (not the
+        // decline_call socket event), which the backend cross-room forwards
+        // to the caller's personal room. Without this case the outgoing call
+        // UI stays stuck on "calling" after the remote user declines.
+        debugPrint('❌ Received call decline signal: $type');
+        handleCallDeclined();
         break;
       case 'call-connected':
       case 'call_connected':
@@ -1587,7 +1615,9 @@ class CallService {
         debugPrint(stack.toString().split('\n').take(5).join('\n'));
       }
 
-      debugPrint('🖥️ Requesting display media (native screen prompt should appear now)');
+      debugPrint(
+        '🖥️ Requesting display media (native screen prompt should appear now)',
+      );
       try {
         _screenStream = await navigator.mediaDevices.getDisplayMedia({
           'video': {
@@ -1609,7 +1639,9 @@ class CallService {
         debugPrint('❌ Failed to get screen stream');
         return false;
       }
-      debugPrint('🖥️ Display media stream obtained: ${_screenStream!.id}, tracks: ${_screenStream!.getTracks().map((t) => '${t.kind}:${t.id}').join(', ')}');
+      debugPrint(
+        '🖥️ Display media stream obtained: ${_screenStream!.id}, tracks: ${_screenStream!.getTracks().map((t) => '${t.kind}:${t.id}').join(', ')}',
+      );
 
       // Get the screen video track
       final screenTrack = _screenStream!.getVideoTracks().firstOrNull;
@@ -1619,7 +1651,9 @@ class CallService {
         _screenStream = null;
         return false;
       }
-      debugPrint('🖥️ Screen track obtained: ${screenTrack.id}, kind=${screenTrack.kind}');
+      debugPrint(
+        '🖥️ Screen track obtained: ${screenTrack.id}, kind=${screenTrack.kind}',
+      );
 
       await _applyScreenTrackConstraints(screenTrack);
 

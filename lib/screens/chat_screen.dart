@@ -1347,6 +1347,53 @@ class _ChatScreenState extends State<ChatScreen>
       unawaited(MediaUploadRetryService().retryAll());
     });
 
+    // Persistent call-log entries (declined / missed / answered). Unlike normal
+    // messages these must render in BOTH directions (the caller sees their own
+    // outgoing "missed/declined" entry too), so we can't reuse the
+    // messageReceived path which drops own-sender messages.
+    _socketService.addListener('callLogMessage', key, (
+      Map<String, dynamic> data,
+    ) async {
+      final Message callMsg;
+      try {
+        callMsg = Message.fromJson(data);
+      } catch (e) {
+        debugPrint('📞 Failed to parse call log message: $e');
+        return;
+      }
+
+      final isForThisChat =
+          callMsg.senderId == widget.otherUser.id ||
+          callMsg.recipientId == widget.otherUser.id;
+      if (!isForThisChat) return;
+
+      final isSelfChat = widget.otherUser.id == _currentUserId;
+      if (isSelfChat &&
+          (callMsg.senderId != _currentUserId ||
+              callMsg.recipientId != _currentUserId)) {
+        return;
+      }
+
+      if (_messages.any((m) => m.id == callMsg.id)) return;
+
+      setState(() {
+        _messages.insert(0, callMsg);
+        if (!_isSelfChat &&
+            !_isAtBottom &&
+            callMsg.senderId == widget.otherUser.id) {
+          _unreadCount++;
+        }
+      });
+
+      if (_currentUserId != null) {
+        await ChatCacheService.addMessageToCache(
+          _currentUserId!,
+          widget.otherUser.id,
+          callMsg,
+        );
+      }
+    });
+
     // Listen for new messages (from other user)
     _socketService.addListener('messageReceived', key, (
       Map<String, dynamic> data,
@@ -7503,34 +7550,29 @@ class _ChatScreenState extends State<ChatScreen>
 
   /// Show call setup modal for video/audio calls
   void _showCallSetupModal(CallType callType) {
-    final isVideoCall = callType == CallType.video;
-    final isAudioCall = callType == CallType.audio;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: true,
-      enableDrag: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: isVideoCall ? 1.0 : 0.62,
-        minChildSize: isAudioCall ? 0.42 : 0.3,
-        maxChildSize: isVideoCall ? 1.0 : 0.72,
-        builder: (context, scrollController) => CallSetupModal(
-          recipientName: widget.otherUser.fullName,
-          callType: callType,
-          scrollController: scrollController,
-          onStartCall:
-              (
-                localStream,
-                selectedMic,
-                selectedSpeaker,
-                selectedCamera,
-                videoEnabled,
-              ) {
-                Navigator.pop(context); // Close modal
-                _initiateCall(localStream, callType, videoEnabled);
-              },
+    // Outgoing call setup is presented full screen (like the incoming-call
+    // setup, which already uses a fullscreenDialog route) so audio and video
+    // device selection get the whole screen instead of a partial bottom sheet.
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (routeContext) => Scaffold(
+          backgroundColor: const Color(0xFF1E293B),
+          body: CallSetupModal(
+            recipientName: widget.otherUser.fullName,
+            callType: callType,
+            onStartCall:
+                (
+                  localStream,
+                  selectedMic,
+                  selectedSpeaker,
+                  selectedCamera,
+                  videoEnabled,
+                ) {
+                  Navigator.pop(routeContext); // Close full-screen setup
+                  _initiateCall(localStream, callType, videoEnabled);
+                },
+          ),
         ),
       ),
     );

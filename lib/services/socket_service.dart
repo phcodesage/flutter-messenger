@@ -79,6 +79,10 @@ class SocketService {
   _callOfferStateSyncListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _callDeclinedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _callEndedListeners = {};
+  // Persistent call-log entries (declined / missed / answered) pushed by the
+  // server as message_type='call' rows, for both DB and signaling calls.
+  final Map<String, Function(Map<String, dynamic>)> _callLogMessageListeners =
+      {};
   final Map<String, Function(Map<String, dynamic>)>
   _connectionChangedListeners = {};
   final Map<String, Function()> _reconnectedListeners = {};
@@ -127,6 +131,10 @@ class SocketService {
     switch (event) {
       case 'messageReceived':
         _messageReceivedListeners[key] =
+            callback as Function(Map<String, dynamic>);
+        break;
+      case 'callLogMessage':
+        _callLogMessageListeners[key] =
             callback as Function(Map<String, dynamic>);
         break;
       case 'messageSent':
@@ -358,6 +366,9 @@ class SocketService {
     switch (event) {
       case 'messageReceived':
         _messageReceivedListeners.remove(key);
+        break;
+      case 'callLogMessage':
+        _callLogMessageListeners.remove(key);
         break;
       case 'messageSent':
         _messageSentListeners.remove(key);
@@ -993,6 +1004,14 @@ class SocketService {
     _socket!.on('message_sent', (data) {
       debugPrint('📤 Message sent: $data');
       _broadcast(_messageSentListeners, data as Map<String, dynamic>);
+    });
+
+    // Persistent call-log entry (declined / missed / answered) — server pushes
+    // this to both parties so the call shows in chat history + the conversation
+    // list. Carries a full message_type='call' payload (sender/recipient/content).
+    _socket!.on('call_log_message', (data) {
+      debugPrint('📞 Call log message: $data');
+      _broadcast(_callLogMessageListeners, data as Map<String, dynamic>);
     });
 
     // Doorbell event
@@ -1829,6 +1848,7 @@ class SocketService {
     _callAnsweredListeners.clear();
     _callDeclinedListeners.clear();
     _callEndedListeners.clear();
+    _callLogMessageListeners.clear();
     _connectionChangedListeners.clear();
     _reconnectedListeners.clear();
     // Group chat listeners
