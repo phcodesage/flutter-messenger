@@ -68,9 +68,9 @@ class ChatComposerPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final messageTextStyle = TextStyle(
       color: Colors.white,
-      fontSize: 18 * scale,
+      fontSize: 20 * scale,
       fontFamily: 'Roboto',
-      height: 1.12,
+      height: 1.2,
     );
 
     // Build the input subtree ONCE per ChatComposerPanel build. It is held
@@ -118,18 +118,23 @@ class ChatComposerPanel extends StatelessWidget {
                 return RepaintBoundary(
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final iconSlotWidth = 40.0 * scale;
-                      final sendButtonReserve = 88.0 * scale;
+                      // Reserves below mirror the REAL widths of the surrounding
+                      // controls so the multi-line estimate flips exactly when
+                      // the text genuinely wraps — not a few chars early, which
+                      // used to make the composer "jump" to its expanded layout
+                      // before a second line existed.
+                      final emojiSlotWidth = 38.0 * scale; // left emoji button
+                      final sendButtonReserve =
+                          72.0 * scale; // Send btn + margin
                       final doorbellReserve = hasDraftText
-                          ? (38.0 * scale)
-                          : (100.0 * scale);
+                          ? (44.0 * scale) // icon-only mic/doorbell
+                          : (104.0 * scale); // doorbell with label
                       final estimatedTextMaxWidth = math.max(
                         120.0,
                         constraints.maxWidth -
                             sendButtonReserve -
-                            iconSlotWidth -
-                            doorbellReserve -
-                            (28.0 * scale),
+                            emojiSlotWidth -
+                            doorbellReserve,
                       );
 
                       final isComposerExpanded = isComposerMultiline(
@@ -202,7 +207,7 @@ class ChatComposerPanel extends StatelessWidget {
                                   alpha: 0.22,
                                 ),
                                 padding: EdgeInsets.symmetric(
-                                  horizontal: 14 * scale,
+                                  horizontal: 11 * scale,
                                   vertical: 10 * scale,
                                 ),
                                 minimumSize: const Size(0, 0),
@@ -349,9 +354,9 @@ class _ComposerInput extends StatelessWidget {
                 hintMaxLines: 1,
                 hintStyle: TextStyle(
                   color: Colors.grey[600],
-                  fontSize: 17 * scale,
+                  fontSize: 19 * scale,
                   fontFamily: 'Roboto',
-                  height: 1.12,
+                  height: 1.2,
                 ),
                 border: InputBorder.none,
                 filled: false,
