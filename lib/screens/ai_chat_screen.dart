@@ -2368,7 +2368,7 @@ class _AiChatScreenState extends State<AiChatScreen>
               color: Colors.transparent,
               child: TweenAnimationBuilder<double>(
                 tween: Tween<double>(begin: 0, end: 1),
-                duration: const Duration(milliseconds: 230),
+                duration: Duration.zero,
                 curve: Curves.easeOutCubic,
                 builder: (context, value, child) {
                   return Opacity(
@@ -4093,7 +4093,7 @@ class _AiChatScreenState extends State<AiChatScreen>
                   ),
           ),
           AnimatedPadding(
-            duration: const Duration(milliseconds: 80),
+            duration: Duration.zero,
             curve: Curves.easeOut,
             padding: EdgeInsets.only(
               bottom: MediaQuery.of(context).viewInsets.bottom,

@@ -394,7 +394,7 @@ class _MessengerAppState extends State<MessengerApp>
               ),
             if (showStatusBanner)
               AnimatedSwitcher(
-                duration: const Duration(milliseconds: 280),
+                duration: Duration.zero,
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeIn,
                 transitionBuilder: (child, animation) {

@@ -292,7 +292,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     );
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
+      duration: Duration.zero,
       curve: Curves.easeOut,
       color: widget.isSelected
           ? Colors.white.withValues(alpha: 0.07)

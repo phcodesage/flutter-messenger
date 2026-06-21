@@ -3,11 +3,8 @@ import 'package:flutter/material.dart';
 /// Full-screen color picker modal for selecting and sending colors to chat partner
 class ColorPickerModal extends StatefulWidget {
   final Function(Color) onColorSelected;
-  
-  const ColorPickerModal({
-    super.key,
-    required this.onColorSelected,
-  });
+
+  const ColorPickerModal({super.key, required this.onColorSelected});
 
   @override
   State<ColorPickerModal> createState() => _ColorPickerModalState();
@@ -15,7 +12,7 @@ class ColorPickerModal extends StatefulWidget {
 
 class _ColorPickerModalState extends State<ColorPickerModal> {
   Color? _selectedColor;
-  
+
   // Color palette with vibrant colors
   static const List<Color> _colorPalette = [
     // Row 1
@@ -24,21 +21,18 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
     Color(0xFF45B7D1), // Sky Blue
     Color(0xFFFF6BCB), // Hot Pink
     Color(0xFFFECA57), // Yellow
-    
     // Row 2
     Color(0xFF00D2FF), // Cyan
     Color(0xFFFF00FF), // Magenta
     Color(0xFF00FFA3), // Mint Green
     Color(0xFF9D4EDD), // Purple
     Color(0xFFFFB347), // Orange
-    
     // Row 3
     Color(0xFF1E1E1E), // Dark Gray (default)
     Color(0xFF3B82F6), // Blue
     Color(0xFFA855F7), // Purple
     Color(0xFF10B981), // Green
     Color(0xFFEF4444), // Red
-    
     // Row 4
     Color(0xFFF59E0B), // Amber
     Color(0xFF14B8A6), // Teal
@@ -71,31 +65,30 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                    icon: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 28,
+                    ),
                     onPressed: () => Navigator.pop(context),
                   ),
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 20),
-            
+
             // Selected color indicator
             Container(
               padding: const EdgeInsets.symmetric(vertical: 16),
               child: Text(
-                _selectedColor == null 
-                    ? 'No color selected' 
-                    : 'Color selected',
-                style: TextStyle(
-                  color: Colors.grey[400],
-                  fontSize: 16,
-                ),
+                _selectedColor == null ? 'No color selected' : 'Color selected',
+                style: TextStyle(color: Colors.grey[400], fontSize: 16),
               ),
             ),
-            
+
             const SizedBox(height: 20),
-            
+
             // Color swatches grid
             Expanded(
               child: Padding(
@@ -111,7 +104,7 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                   itemBuilder: (context, index) {
                     final color = _colorPalette[index];
                     final isSelected = _selectedColor?.value == color.value;
-                    
+
                     return GestureDetector(
                       onTap: () {
                         setState(() {
@@ -119,12 +112,14 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                         });
                       },
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
+                        duration: Duration.zero,
                         decoration: BoxDecoration(
                           color: color,
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: isSelected ? Colors.white : Colors.transparent,
+                            color: isSelected
+                                ? Colors.white
+                                : Colors.transparent,
                             width: 4,
                           ),
                           boxShadow: isSelected
@@ -150,9 +145,9 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                 ),
               ),
             ),
-            
+
             const SizedBox(height: 20),
-            
+
             // Action buttons
             Padding(
               padding: const EdgeInsets.all(24),
@@ -172,13 +167,16 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                       ),
                       child: const Text(
                         'Cancel',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
-                  
+
                   const SizedBox(width: 16),
-                  
+
                   // Send Color button
                   Expanded(
                     flex: 2,
@@ -201,7 +199,10 @@ class _ColorPickerModalState extends State<ColorPickerModal> {
                       ),
                       child: const Text(
                         'Send Color',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),

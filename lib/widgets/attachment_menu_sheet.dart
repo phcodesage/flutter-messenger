@@ -29,7 +29,8 @@ class AttachmentMenuSheet extends StatelessWidget {
       isScrollControlled: true,
       transitionAnimationController: AnimationController(
         vsync: Navigator.of(context),
-        duration: const Duration(milliseconds: 300),
+        // Instant open/close — no slide-up animation.
+        duration: Duration.zero,
       ),
       builder: (context) => AttachmentMenuSheet(
         onCameraTap: () {

@@ -425,7 +425,8 @@ class _ChatScreenState extends State<ChatScreen>
     }
     _taskBadgeAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      // Instant (no badge bounce) — forward() jumps straight to the end state.
+      duration: Duration.zero,
     );
     _inputFocusNode.addListener(_onFocusChange);
     _scrollController.addListener(_onScroll);
@@ -3329,13 +3330,10 @@ class _ChatScreenState extends State<ChatScreen>
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
-      // For a reverse list the bottom is offset 0. The keyboard's space is held
-      // by the reactive bottom spacer (list item 0), so 0 is always the bottom.
-      _scrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      // Jump with no animation (WhatsApp-like, keeps the app snappy). For a
+      // reverse list the bottom is offset 0; the keyboard's space is held by the
+      // reactive bottom spacer (list item 0), so 0 is always the bottom.
+      _scrollController.jumpTo(0);
     }
   }
 
@@ -3463,11 +3461,8 @@ class _ChatScreenState extends State<ChatScreen>
             _scrollController.position.maxScrollExtent,
           );
 
-      await _scrollController.animateTo(
-        revealOffset,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-      );
+      // Jump (no animation) — the flash highlight already signals the target.
+      _scrollController.jumpTo(revealOffset);
     } finally {
       Timer(const Duration(seconds: 2), () {
         if (mounted) setState(() => _bubbleFlashId = null);
@@ -5944,7 +5939,7 @@ class _ChatScreenState extends State<ChatScreen>
                   leading: GestureDetector(
                     onTap: isPinning ? null : () => togglePin(phrase),
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
+                      duration: Duration.zero,
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
@@ -6054,7 +6049,7 @@ class _ChatScreenState extends State<ChatScreen>
                   onTap: () =>
                       setModalState(() => showPinnedTab = label == 'Pinned'),
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
+                    duration: Duration.zero,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 7,
@@ -6363,7 +6358,7 @@ class _ChatScreenState extends State<ChatScreen>
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+        duration: Duration.zero,
         height: 40,
         decoration: BoxDecoration(
           color: onTap == null ? color.withValues(alpha: 0.35) : color,
@@ -13301,7 +13296,7 @@ class _ChatScreenState extends State<ChatScreen>
       barrierDismissible: true,
       barrierLabel: 'Tasks',
       barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 320),
+      transitionDuration: Duration.zero,
       transitionBuilder: (context, animation, secondaryAnimation, child) {
         final curved = CurvedAnimation(
           parent: animation,
@@ -13977,7 +13972,7 @@ class _ChatScreenState extends State<ChatScreen>
     return GestureDetector(
       onTap: () => _showTaskDetail(task, isCompleted),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+        duration: Duration.zero,
         decoration: BoxDecoration(
           color: const Color(0xFF2C2C2E),
           borderRadius: BorderRadius.circular(12),
@@ -14157,7 +14152,7 @@ class _ChatScreenState extends State<ChatScreen>
       barrierDismissible: true,
       barrierLabel: 'Excalidraw',
       barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: const Duration(milliseconds: 320),
+      transitionDuration: Duration.zero,
       transitionBuilder: (context, animation, secondaryAnimation, child) {
         final curved = CurvedAnimation(
           parent: animation,
@@ -16698,7 +16693,7 @@ class _TapHighlightChipState extends State<_TapHighlightChip> {
       onTapUp: _onTapUp,
       onTapCancel: _onTapCancel,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
+        duration: Duration.zero,
         curve: Curves.easeOut,
         constraints: const BoxConstraints(minHeight: 30, minWidth: 58),
         padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),

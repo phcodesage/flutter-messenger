@@ -1316,9 +1316,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         setState(() {
           _messages.removeWhere((m) => m.id == tempId);
         });
-        _showTopSnackBar(
-          SnackBar(content: Text('Failed to upload file: $e')),
-        );
+        _showTopSnackBar(SnackBar(content: Text('Failed to upload file: $e')));
       }
     }
   }
@@ -1390,9 +1388,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // Persist the latest in-memory snapshot so the next open paints
     // immediately from cache. Fire-and-forget; safe across teardown.
     if (_messages.isNotEmpty) {
-      unawaited(
-        ChatCacheService.saveGroupMessages(widget.group.id, _messages),
-      );
+      unawaited(ChatCacheService.saveGroupMessages(widget.group.id, _messages));
     }
 
     // Stop typing indicator when leaving the screen
@@ -1528,7 +1524,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             // Input area — only this section moves with the keyboard.
             // The rest of the screen stays stable (no full relayout).
             AnimatedPadding(
-              duration: const Duration(milliseconds: 80),
+              duration: Duration.zero,
               curve: Curves.easeOut,
               padding: EdgeInsets.only(bottom: keyboardInset),
               child: _buildInputArea(),
@@ -1674,8 +1670,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
       final isSentByMe = message.senderId == _currentUserId;
       return Align(
-        alignment:
-            isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1742,9 +1737,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         (message.fileType?.startsWith('audio/') ?? false);
     final bool isMedia = isImage || isVideo;
     final bool isGenericFile =
-      (!isMedia && !isAudio) &&
-      ((message.messageType == 'file' || message.messageType == 'document') ||
-       (message.fileUrl != null && message.fileUrl!.isNotEmpty));
+        (!isMedia && !isAudio) &&
+        ((message.messageType == 'file' || message.messageType == 'document') ||
+            (message.fileUrl != null && message.fileUrl!.isNotEmpty));
 
     // Debug logging for file message display
     if (message.messageType != 'text' && message.messageType != 'system') {
@@ -1866,15 +1861,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 topRight: const Radius.circular(16),
                 bottomLeft: Radius.circular(
                   (message.content.isNotEmpty &&
-                          !_isOnlyFilename(message.content)) ||
-                      (message.caption != null && message.caption!.isNotEmpty)
+                              !_isOnlyFilename(message.content)) ||
+                          (message.caption != null &&
+                              message.caption!.isNotEmpty)
                       ? 0
                       : (isSentByMe ? 16 : 4),
                 ),
                 bottomRight: Radius.circular(
                   (message.content.isNotEmpty &&
-                          !_isOnlyFilename(message.content)) ||
-                      (message.caption != null && message.caption!.isNotEmpty)
+                              !_isOnlyFilename(message.content)) ||
+                          (message.caption != null &&
+                              message.caption!.isNotEmpty)
                       ? 0
                       : (isSentByMe ? 4 : 16),
                 ),
@@ -1885,10 +1882,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   builder: (context) {
                     // Fixed media box so the bubble never resizes (no layout
                     // jump) between placeholder, loaded, and error states.
-                    final mediaWidth =
-                        MediaQuery.of(context).size.width * 0.70;
-                    final mediaHeight =
-                        (mediaWidth * 0.75).clamp(180.0, 300.0);
+                    final mediaWidth = MediaQuery.of(context).size.width * 0.70;
+                    final mediaHeight = (mediaWidth * 0.75).clamp(180.0, 300.0);
                     return SizedBox(
                       width: mediaWidth,
                       height: mediaHeight,
@@ -1960,7 +1955,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             // File info row (filename + size)
             if (message.fileName != null || message.fileSize != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 child: Row(
                   children: [
                     Icon(
@@ -2092,9 +2090,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 children: [
                   // Original message text
                   Text(
-                    message.caption ?? (isMedia
-                        ? (message.fileName ?? message.content)
-                        : message.content),
+                    message.caption ??
+                        (isMedia
+                            ? (message.fileName ?? message.content)
+                            : message.content),
                     style: const TextStyle(color: Colors.white, fontSize: 15),
                   ),
                   // Translation (if available)
@@ -2148,7 +2147,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           if (isSentByMe)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: (message.fileUrl != null &&
+              child:
+                  (message.fileUrl != null &&
                       message.fileUrl!.isNotEmpty &&
                       (isMedia || isAudio || isGenericFile))
                   ? Row(
@@ -2321,20 +2321,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Widget _buildGroupGenericFile(GroupMessage message) {
     final String fileName =
         (message.fileName != null && message.fileName!.isNotEmpty)
-            ? message.fileName!
-            : (message.fileUrl != null
-                ? (Uri.tryParse(message.fileUrl!)
-                        ?.pathSegments
-                        .last
-                        .replaceAll('%20', ' ') ??
+        ? message.fileName!
+        : (message.fileUrl != null
+              ? (Uri.tryParse(
+                      message.fileUrl!,
+                    )?.pathSegments.last.replaceAll('%20', ' ') ??
                     'File')
-                : 'File');
+              : 'File');
     final String ext = FileTypeIcon.extensionOf(fileName);
     final String sizeStr = (message.fileSize != null && message.fileSize! > 0)
         ? _formatFileSize(message.fileSize!)
         : (message.fileUrl != null ? 'Unknown size' : 'File not available');
-    final String subtitle =
-        ext.isNotEmpty ? '${ext.toUpperCase()} · $sizeStr' : sizeStr;
+    final String subtitle = ext.isNotEmpty
+        ? '${ext.toUpperCase()} · $sizeStr'
+        : sizeStr;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -2421,16 +2421,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final fileUrl = message.fileUrl;
     if (fileUrl == null || fileUrl.isEmpty) {
       if (!mounted) return;
-      _showTopSnackBar(
-        const SnackBar(content: Text('File URL not available')),
-      );
+      _showTopSnackBar(const SnackBar(content: Text('File URL not available')));
       return;
     }
 
     if (mounted) {
-      _showTopSnackBar(
-        const SnackBar(content: Text('Downloading file...')),
-      );
+      _showTopSnackBar(const SnackBar(content: Text('Downloading file...')));
     }
 
     try {
@@ -2441,7 +2437,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
 
       final mimeType =
-          message.fileType ?? lookupMimeType(uri.path) ?? 'application/octet-stream';
+          message.fileType ??
+          lookupMimeType(uri.path) ??
+          'application/octet-stream';
       final outputName = message.fileName ?? uri.pathSegments.last;
 
       if (Platform.isAndroid) {
@@ -4878,13 +4876,11 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
             source = DeviceFileSource(cached.file.path);
           } else {
             source = UrlSource(widget.audioUrl);
-            unawaited(
-              () async {
-                try {
-                  await DefaultCacheManager().downloadFile(widget.audioUrl);
-                } catch (_) {}
-              }(),
-            );
+            unawaited(() async {
+              try {
+                await DefaultCacheManager().downloadFile(widget.audioUrl);
+              } catch (_) {}
+            }());
           }
         } catch (_) {
           source = UrlSource(widget.audioUrl);
@@ -4909,7 +4905,10 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
             actions: [
               TextButton(
                 onPressed: messenger.hideCurrentMaterialBanner,
-                child: const Text('DISMISS', style: TextStyle(color: Colors.white)),
+                child: const Text(
+                  'DISMISS',
+                  style: TextStyle(color: Colors.white),
+                ),
               ),
             ],
           ),
@@ -5024,16 +5023,15 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
 class _GroupVideoThumbnailWidget extends StatefulWidget {
   final String videoUrl;
 
-  const _GroupVideoThumbnailWidget({
-    required this.videoUrl,
-  });
+  const _GroupVideoThumbnailWidget({required this.videoUrl});
 
   @override
   State<_GroupVideoThumbnailWidget> createState() =>
       _GroupVideoThumbnailWidgetState();
 }
 
-class _GroupVideoThumbnailWidgetState extends State<_GroupVideoThumbnailWidget> {
+class _GroupVideoThumbnailWidgetState
+    extends State<_GroupVideoThumbnailWidget> {
   VideoPlayerController? _controller;
   bool _initialized = false;
   bool _hasError = false;
@@ -5056,13 +5054,11 @@ class _GroupVideoThumbnailWidgetState extends State<_GroupVideoThumbnailWidget> 
         controller = VideoPlayerController.networkUrl(
           Uri.parse(widget.videoUrl),
         );
-        unawaited(
-          () async {
-            try {
-              await DefaultCacheManager().downloadFile(widget.videoUrl);
-            } catch (_) {}
-          }(),
-        );
+        unawaited(() async {
+          try {
+            await DefaultCacheManager().downloadFile(widget.videoUrl);
+          } catch (_) {}
+        }());
       }
       await controller.initialize();
       if (!mounted) {
@@ -5098,11 +5094,7 @@ class _GroupVideoThumbnailWidgetState extends State<_GroupVideoThumbnailWidget> 
       return Container(
         color: Colors.grey[900],
         child: const Center(
-          child: Icon(
-            Icons.videocam,
-            color: Colors.white38,
-            size: 48,
-          ),
+          child: Icon(Icons.videocam, color: Colors.white38, size: 48),
         ),
       );
     }
