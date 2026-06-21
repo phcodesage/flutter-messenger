@@ -56,13 +56,18 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     Color(0xFF17BECF),
   ];
 
+  // Compact header height — trimmed from the default kToolbarHeight (56) to
+  // claw back vertical space for the message list.
+  static const double _compactToolbarHeight = 48;
+
   @override
-  Size get preferredSize => Size.fromHeight(kToolbarHeight + 4 * scale);
+  Size get preferredSize => Size.fromHeight(_compactToolbarHeight * scale);
 
   @override
   Widget build(BuildContext context) {
     return AppBar(
       backgroundColor: headerColor,
+      toolbarHeight: _compactToolbarHeight * scale,
       elevation: 0,
       automaticallyImplyLeading: false,
       // In the desktop two-pane layout the chat lives beside the conversation

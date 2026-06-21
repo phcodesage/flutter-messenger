@@ -4970,7 +4970,7 @@ class _ChatScreenState extends State<ChatScreen>
             onTap: _showSendToManyDialog,
             borderRadius: BorderRadius.circular(18),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               decoration: BoxDecoration(
                 color: const Color(0xFF2A1F45),
                 borderRadius: BorderRadius.circular(18),
@@ -5001,7 +5001,7 @@ class _ChatScreenState extends State<ChatScreen>
             },
             borderRadius: BorderRadius.circular(18),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               decoration: BoxDecoration(
                 color: _markNextMessageAsTask
                     ? const Color(0xFF7C2D12)
@@ -5027,7 +5027,7 @@ class _ChatScreenState extends State<ChatScreen>
         );
 
         return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.only(bottom: 3),
           child: Row(
             children: [
               Expanded(
@@ -5404,7 +5404,7 @@ class _ChatScreenState extends State<ChatScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         buildFittedRow(topRow),
-        const SizedBox(height: 4),
+        const SizedBox(height: 2),
         buildFittedRow(bottomRow),
       ],
     );
@@ -16624,8 +16624,8 @@ class _TapHighlightChipState extends State<_TapHighlightChip> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 120),
         curve: Curves.easeOut,
-        constraints: const BoxConstraints(minHeight: 36, minWidth: 58),
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
+        constraints: const BoxConstraints(minHeight: 30, minWidth: 58),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: bg,
