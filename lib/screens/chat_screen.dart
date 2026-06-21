@@ -227,6 +227,13 @@ class _ChatScreenState extends State<ChatScreen>
   double _lockedInputPanelHeight = 0;
   Timer? _inputModeSwitchTimer;
   double _lastKnownKeyboardInset = 0;
+  // App-wide cache of the keyboard height so the FIRST open in a freshly opened
+  // chat can snap instantly too (per-screen state resets, this doesn't).
+  static double _lastKnownKeyboardInsetGlobal = 0;
+  // Live keyboard inset (logical px), updated from didChangeMetrics. The bottom
+  // composer subscribes to this via a ValueListenableBuilder so the keyboard
+  // animation slides only the composer — the message list never rebuilds.
+  final ValueNotifier<double> _keyboardInsetNotifier = ValueNotifier<double>(0);
   bool _otherUserTyping = false;
   String _typingPreview = '';
   int? _currentUserId;
@@ -333,7 +340,6 @@ class _ChatScreenState extends State<ChatScreen>
   DateTime? _lastClipboardPasteAttemptAt;
   double _lastMetricsViewInsetBottom = 0;
   double _lastMetricsViewPaddingBottom = 0;
-  Timer? _metricsRefreshTimer;
 
   // Flag to suppress doorbell echo on the triggering device
   bool _localDoorbellPending = false;
@@ -413,6 +419,10 @@ class _ChatScreenState extends State<ChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Seed from the app-wide cache so the first keyboard open snaps instantly.
+    if (_lastKnownKeyboardInsetGlobal > 0) {
+      _lastKnownKeyboardInset = _lastKnownKeyboardInsetGlobal;
+    }
     _taskBadgeAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -623,23 +633,36 @@ class _ChatScreenState extends State<ChatScreen>
 
     if (!metricsChanged || !mounted) return;
 
-    // Suppress rebuilds while restoring focus after app resume to prevent
+    // Suppress updates while restoring focus after app resume to prevent
     // the UI from jumping (keyboard inset briefly reports 0 then restores).
     if (_restoreInputFocusOnResume || _isRestoringInputFocus) return;
 
-    _metricsRefreshTimer?.cancel();
-    _metricsRefreshTimer = Timer(const Duration(milliseconds: 32), () {
-      if (!mounted) return;
-      if (_restoreInputFocusOnResume || _isRestoringInputFocus) return;
-      if (_inputFocusNode.hasFocus ||
-          _showEmojiPicker ||
-          _isActionsPanelOpen ||
-          _isKeyboardVisible ||
-          viewInsetBottom > 0 ||
-          viewPaddingBottom > 0) {
-        setState(() {});
-      }
-    });
+    if (viewInsetBottom > 0) {
+      _lastKnownKeyboardInset = viewInsetBottom;
+      _lastKnownKeyboardInsetGlobal = viewInsetBottom;
+    }
+
+    // The emoji panel deliberately hides the keyboard while keeping focus; its
+    // height is driven separately, so don't react to the inset here.
+    if (_showEmojiPicker) return;
+
+    // Track the keyboard frame-by-frame (on Android 11+ viewInsets is already
+    // synced to the IME animation). We do NOT relayout the screen: the message
+    // list keeps its size and only the composer translates + the list scrolls,
+    // so following every frame stays cheap and feels "attached" like WhatsApp.
+    _setKeyboardInset(viewInsetBottom);
+  }
+
+  /// Publish a new keyboard inset. This drives two cheap, paint/layout-only
+  /// reactions that both listen to [_keyboardInsetNotifier]:
+  ///  • the composer translates up over the (un-resized) message list, and
+  ///  • the list's reactive bottom spacer (item 0) grows by the same amount,
+  ///    lifting the newest message just above the composer.
+  /// The message list is never rebuilt or resized, so following the keyboard
+  /// frame-by-frame stays smooth and "attached", WhatsApp-style.
+  void _setKeyboardInset(double newInset) {
+    if ((newInset - _keyboardInsetNotifier.value).abs() < 0.5) return;
+    _keyboardInsetNotifier.value = newInset;
   }
 
   Future<void> _restoreInputFocusAfterResume() async {
@@ -669,14 +692,15 @@ class _ChatScreenState extends State<ChatScreen>
     if (mounted) setState(() {});
   }
 
-  double _effectiveKeyboardInset(BuildContext context) {
-    // During app resume, freeze at the last known keyboard height entirely.
-    // Don't even read MediaQuery to avoid registering a rebuild dependency
-    // that would cause the UI to animate as the keyboard re-appears.
+  double _effectiveKeyboardInset() {
+    // During app resume, freeze at the last known keyboard height entirely so
+    // the UI doesn't animate as the keyboard re-appears.
     if (_restoreInputFocusOnResume || _isRestoringInputFocus) {
       return _lastKnownKeyboardInset;
     }
-    final currentInset = MediaQuery.of(context).viewInsets.bottom;
+    // Read the cached notifier value — NOT MediaQuery — so callers in build()
+    // don't subscribe to viewInsets and rebuild every keyboard-animation frame.
+    final currentInset = _keyboardInsetNotifier.value;
     if (currentInset > 0) {
       _lastKnownKeyboardInset = currentInset;
     }
@@ -729,8 +753,9 @@ class _ChatScreenState extends State<ChatScreen>
 
   /// Listen to scroll position to show/hide scroll-to-bottom button
   void _onScroll() {
-    // Since list is reversed, position 0 means we're at the bottom (newest messages)
-    // We're "at bottom" if scroll offset is near 0
+    // Since list is reversed, offset 0 is the bottom (newest). The keyboard is
+    // accounted for by the reactive bottom spacer inside the list (item 0), so
+    // the bottom baseline stays 0.
     final isAtBottom = _scrollController.offset < 100;
     if (_isAtBottom != isAtBottom) {
       setState(() {
@@ -815,6 +840,9 @@ class _ChatScreenState extends State<ChatScreen>
       setState(() {
         _isKeyboardVisible = isVisible;
       });
+      // The composer follows the keyboard via didChangeMetrics (frame-by-frame),
+      // so there's nothing to snap here. When the field loses focus the IME
+      // closes and didChangeMetrics drives the inset back to 0.
     }
 
     if (isVisible) {
@@ -3301,7 +3329,8 @@ class _ChatScreenState extends State<ChatScreen>
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
-      // For reverse list, scroll to 0 (which is the bottom)
+      // For a reverse list the bottom is offset 0. The keyboard's space is held
+      // by the reactive bottom spacer (list item 0), so 0 is always the bottom.
       _scrollController.animateTo(
         0,
         duration: const Duration(milliseconds: 300),
@@ -6892,9 +6921,12 @@ class _ChatScreenState extends State<ChatScreen>
   /// Returns a UI scale factor that keeps large/high-DPI phones visually
   /// compact while preserving readability on smaller displays.
   double _uiScale(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final width = media.size.width;
-    final dpr = media.devicePixelRatio;
+    // Subscribe ONLY to the size/dpr aspects of MediaQuery — never viewInsets —
+    // so opening/closing the keyboard does not rebuild the whole chat screen
+    // (the message list in particular). The composer's slide is driven
+    // separately via _keyboardInsetNotifier.
+    final width = MediaQuery.sizeOf(context).width;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
 
     var scale = (width / 411.0).clamp(0.76, 1.0);
 
@@ -9813,7 +9845,7 @@ class _ChatScreenState extends State<ChatScreen>
   /// Toggle emoji picker visibility (inline below input)
   /// Behaves like FB Messenger: emoji picker replaces the keyboard.
   void _showEmojiPickerModal(BuildContext context) {
-    final currentKeyboardInset = _effectiveKeyboardInset(context);
+    final currentKeyboardInset = _effectiveKeyboardInset();
     final stablePanelHeight = _emojiPanelHeight(currentKeyboardInset);
     _saveCurrentInputSelection();
 
@@ -11152,7 +11184,7 @@ class _ChatScreenState extends State<ChatScreen>
     unawaited(_persistConversationCacheSnapshot());
     _fileOpsChannel.setMethodCallHandler(null);
     _inputModeSwitchTimer?.cancel();
-    _metricsRefreshTimer?.cancel();
+    _keyboardInsetNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _retryProgressSubscription?.cancel();
     _textRetryProgressSubscription?.cancel();
@@ -11196,18 +11228,10 @@ class _ChatScreenState extends State<ChatScreen>
   @override
   Widget build(BuildContext context) {
     final scale = _uiScale(context);
-    final keyboardInset = _effectiveKeyboardInset(context);
-    final emojiPanelHeight = _emojiPanelHeight(keyboardInset);
-    final stablePanelHeight =
-        _isSwitchingInputMode && _lockedInputPanelHeight > 0
-        ? _lockedInputPanelHeight
-        : (_showEmojiPicker ? emojiPanelHeight : keyboardInset);
-    final actionPanelInset = (_isActionsPanelOpen && _actionsPanelFromKeyboard)
-        ? _actionsPanelInset
-        : 0.0;
-    final composerInset = _showEmojiPicker
-        ? 0.0
-        : math.max(stablePanelHeight, actionPanelInset);
+    // NOTE: the keyboard inset is intentionally NOT read here. It is consumed
+    // only inside the bottom composer's ValueListenableBuilder (keyed on
+    // _keyboardInsetNotifier) so the keyboard animation slides the composer
+    // without rebuilding the message list.
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFF2C2C2C),
@@ -11250,6 +11274,10 @@ class _ChatScreenState extends State<ChatScreen>
                         hasMoreMessages: _hasMoreMessages,
                         isLoadingMore: _isLoadingMore,
                         onLoadMoreMessages: _loadMoreMessages,
+                        // Reactive bottom spacer rides the keyboard so the newest
+                        // message lifts above the overlaying composer without the
+                        // list ever resizing/rebuilding.
+                        bottomSpacer: _keyboardInsetNotifier,
                         loadingWidgetBuilder: (_) =>
                             _buildChatLoadingPlaceholder(),
                         itemBuilder: (context, index) {
@@ -11361,67 +11389,78 @@ class _ChatScreenState extends State<ChatScreen>
                           left: 0,
                           right: 0,
                           bottom: 16,
-                          child: Center(
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _unreadCount = 0;
-                                });
-                                _scrollToBottom();
-                                _markVisibleMessagesAsRead();
-                              },
-                              child: Container(
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF7C3AED),
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.3,
-                                      ),
-                                      blurRadius: 6,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
+                          // Ride above the composer when the keyboard is up so
+                          // the button isn't hidden behind the overlay. Only the
+                          // translate rebuilds on inset change, not the button.
+                          child: ValueListenableBuilder<double>(
+                            valueListenable: _keyboardInsetNotifier,
+                            builder: (context, inset, child) =>
+                                Transform.translate(
+                                  offset: Offset(0, -inset),
+                                  child: child,
                                 ),
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    const Icon(
-                                      Icons.keyboard_arrow_down,
-                                      color: Colors.white,
-                                      size: 20,
-                                    ),
-                                    if (_unreadCount > 0)
-                                      Positioned(
-                                        top: -2,
-                                        right: -2,
-                                        child: Container(
-                                          padding: const EdgeInsets.all(3),
-                                          decoration: const BoxDecoration(
-                                            color: Colors.red,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          constraints: const BoxConstraints(
-                                            minWidth: 14,
-                                            minHeight: 14,
-                                          ),
-                                          child: Text(
-                                            _unreadCount > 99
-                                                ? '99+'
-                                                : _unreadCount.toString(),
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.bold,
+                            child: Center(
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _unreadCount = 0;
+                                  });
+                                  _scrollToBottom();
+                                  _markVisibleMessagesAsRead();
+                                },
+                                child: Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF7C3AED),
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.3,
+                                        ),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      const Icon(
+                                        Icons.keyboard_arrow_down,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                      if (_unreadCount > 0)
+                                        Positioned(
+                                          top: -2,
+                                          right: -2,
+                                          child: Container(
+                                            padding: const EdgeInsets.all(3),
+                                            decoration: const BoxDecoration(
+                                              color: Colors.red,
+                                              shape: BoxShape.circle,
                                             ),
-                                            textAlign: TextAlign.center,
+                                            constraints: const BoxConstraints(
+                                              minWidth: 14,
+                                              minHeight: 14,
+                                            ),
+                                            child: Text(
+                                              _unreadCount > 99
+                                                  ? '99+'
+                                                  : _unreadCount.toString(),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 8,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -11430,81 +11469,118 @@ class _ChatScreenState extends State<ChatScreen>
                     ],
                   ),
                 ),
-                // Bottom bar: typing preview + message input (keyed for modal positioning)
-                Column(
-                  key: _bottomBarKey,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Typing preview - pinned at bottom, always visible
-                    Container(
-                      height: (_otherUserTyping && _typingPreview.isNotEmpty)
-                          ? null
-                          : 0,
-                      padding: (_otherUserTyping && _typingPreview.isNotEmpty)
-                          ? const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            )
-                          : EdgeInsets.zero,
-                      decoration: BoxDecoration(
-                        color: _headerColor,
-                        border: const Border(
-                          top: BorderSide(color: Color(0xFF3D3D3D), width: 1),
-                        ),
-                      ),
-                      child: (_otherUserTyping && _typingPreview.isNotEmpty)
-                          ? RepaintBoundary(
-                              child: ChatTypingPreviewBubble(
-                                scale: scale,
-                                otherUserName: widget.otherUser.fullName,
-                                typingPreview: _typingPreview,
+                // Bottom bar: typing preview + message input (keyed for modal
+                // positioning). Only this composer subtree rebuilds as the
+                // keyboard slides — the message list above stays untouched.
+                ValueListenableBuilder<double>(
+                  valueListenable: _keyboardInsetNotifier,
+                  builder: (context, _, __) {
+                    final keyboardInset = _effectiveKeyboardInset();
+                    final emojiPanelHeight = _emojiPanelHeight(keyboardInset);
+                    // Emoji-panel content height (only used when the picker shows).
+                    final stablePanelHeight =
+                        _isSwitchingInputMode && _lockedInputPanelHeight > 0
+                        ? _lockedInputPanelHeight
+                        : emojiPanelHeight;
+                    final actionPanelInset =
+                        (_isActionsPanelOpen && _actionsPanelFromKeyboard)
+                        ? _actionsPanelInset
+                        : 0.0;
+                    // The keyboard is handled as an OVERLAY: we translate the
+                    // composer up over the (un-resized) message list instead of
+                    // reserving layout space for it, so the list never relayouts.
+                    // composerInset only reserves real space for the emoji /
+                    // actions panels, which replace the keyboard.
+                    final composerInset = _showEmojiPicker
+                        ? 0.0
+                        : actionPanelInset;
+                    final translateY = _showEmojiPicker ? 0.0 : keyboardInset;
+                    return Transform.translate(
+                      offset: Offset(0, -translateY),
+                      child: Column(
+                        key: _bottomBarKey,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Typing preview - pinned at bottom, always visible
+                          Container(
+                            height:
+                                (_otherUserTyping && _typingPreview.isNotEmpty)
+                                ? null
+                                : 0,
+                            padding:
+                                (_otherUserTyping && _typingPreview.isNotEmpty)
+                                ? const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  )
+                                : EdgeInsets.zero,
+                            decoration: BoxDecoration(
+                              color: _headerColor,
+                              border: const Border(
+                                top: BorderSide(
+                                  color: Color(0xFF3D3D3D),
+                                  width: 1,
+                                ),
                               ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                    // Common phrases bar (outside action buttons background, single row)
-                    CommonPhraseBar(
-                      phrases: _commonPhrases,
-                      hidden: _hideCommonPhrases,
-                      onChipTap: _onCommonPhraseChipTap,
-                      scale: scale,
-                    ),
-                    ChatComposerPanel(
-                      scale: scale,
-                      backgroundColor: _headerColor,
-                      composerInset: composerInset,
-                      showEmojiPicker: _showEmojiPicker,
-                      isEditing: _editingMessage != null,
-                      stablePanelHeight: stablePanelHeight,
-                      onShowEmojiPickerModal: () =>
-                          _showEmojiPickerModal(context),
-                      onClipboardPasteShortcut: _onComposerPasteShortcut,
-                      onInputContextMenuOpened: _onInputContextMenuOpened,
-                      onTextChanged: _onTextChanged,
-                      onSend: _sendMessage,
-                      messageController: _messageController,
-                      inputFocusNode: _inputFocusNode,
-                      inputScrollController: _inputScrollController,
-                      buildDoorbellComposerButton:
-                          ({
-                            required bool showLabel,
-                            required double iconSize,
-                            required EdgeInsets padding,
-                          }) => _buildDoorbellComposerButton(
-                            showLabel: showLabel,
-                            iconSize: iconSize,
-                            padding: padding,
+                            ),
+                            child:
+                                (_otherUserTyping && _typingPreview.isNotEmpty)
+                                ? RepaintBoundary(
+                                    child: ChatTypingPreviewBubble(
+                                      scale: scale,
+                                      otherUserName: widget.otherUser.fullName,
+                                      typingPreview: _typingPreview,
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
                           ),
-                      isComposerMultiline: _isComposerMultiline,
-                      editPreview: _buildEditPreview(),
-                      replyPreview: _buildReplyPreview(),
-                      sendToManyQuickAction: _buildSendToManyQuickAction(),
-                      unifiedActionsBar: _buildUnifiedActionsBar(),
-                      actionsBelowInput: widget.embedded,
-                      inlineEmojiPickerBuilder: (panelHeight) =>
-                          _buildInlineEmojiPicker(panelHeight),
-                    ),
-                  ],
+                          // Common phrases bar (outside action buttons background, single row)
+                          CommonPhraseBar(
+                            phrases: _commonPhrases,
+                            hidden: _hideCommonPhrases,
+                            onChipTap: _onCommonPhraseChipTap,
+                            scale: scale,
+                          ),
+                          ChatComposerPanel(
+                            scale: scale,
+                            backgroundColor: _headerColor,
+                            composerInset: composerInset,
+                            showEmojiPicker: _showEmojiPicker,
+                            isEditing: _editingMessage != null,
+                            stablePanelHeight: stablePanelHeight,
+                            onShowEmojiPickerModal: () =>
+                                _showEmojiPickerModal(context),
+                            onClipboardPasteShortcut: _onComposerPasteShortcut,
+                            onInputContextMenuOpened: _onInputContextMenuOpened,
+                            onTextChanged: _onTextChanged,
+                            onSend: _sendMessage,
+                            messageController: _messageController,
+                            inputFocusNode: _inputFocusNode,
+                            inputScrollController: _inputScrollController,
+                            buildDoorbellComposerButton:
+                                ({
+                                  required bool showLabel,
+                                  required double iconSize,
+                                  required EdgeInsets padding,
+                                }) => _buildDoorbellComposerButton(
+                                  showLabel: showLabel,
+                                  iconSize: iconSize,
+                                  padding: padding,
+                                ),
+                            isComposerMultiline: _isComposerMultiline,
+                            editPreview: _buildEditPreview(),
+                            replyPreview: _buildReplyPreview(),
+                            sendToManyQuickAction:
+                                _buildSendToManyQuickAction(),
+                            unifiedActionsBar: _buildUnifiedActionsBar(),
+                            actionsBelowInput: widget.embedded,
+                            inlineEmojiPickerBuilder: (panelHeight) =>
+                                _buildInlineEmojiPicker(panelHeight),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ],
             ),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/message.dart';
@@ -16,6 +17,7 @@ class ChatMessageList extends StatelessWidget {
     required this.itemBuilder,
     required this.emptyStateBuilder,
     this.loadingWidgetBuilder,
+    this.bottomSpacer,
   });
 
   final double scale;
@@ -28,6 +30,12 @@ class ChatMessageList extends StatelessWidget {
   final Widget Function(BuildContext, int) itemBuilder;
   final Widget Function(BuildContext) emptyStateBuilder;
   final Widget Function(BuildContext)? loadingWidgetBuilder;
+
+  /// Live keyboard inset (logical px). When provided, a reactive spacer of this
+  /// height is inserted as the reverse list's first (bottom-most) item so the
+  /// newest message rides up above the keyboard-overlaying composer. Only the
+  /// spacer rebuilds when the inset changes — the list and its items do not.
+  final ValueListenable<double>? bottomSpacer;
 
   @override
   Widget build(BuildContext context) {
@@ -59,10 +67,24 @@ class ChatMessageList extends StatelessWidget {
             // (the old height * 2 caused memory/decode pressure on
             // image-heavy chats).
             cacheExtent: MediaQuery.sizeOf(context).height,
-            itemCount: messages.length + (hasMoreMessages ? 1 : 0),
+            itemCount:
+                messages.length +
+                (hasMoreMessages ? 1 : 0) +
+                (bottomSpacer != null ? 1 : 0),
             addAutomaticKeepAlives: false,
             addRepaintBoundaries: true,
             itemBuilder: (context, index) {
+              // Reverse list → index 0 is the bottom. The keyboard spacer sits
+              // there so the newest message lifts above the composer.
+              if (bottomSpacer != null) {
+                if (index == 0) {
+                  return ValueListenableBuilder<double>(
+                    valueListenable: bottomSpacer!,
+                    builder: (context, inset, _) => SizedBox(height: inset),
+                  );
+                }
+                index -= 1;
+              }
               if (index == messages.length) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
