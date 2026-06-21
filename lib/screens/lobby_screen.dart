@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lobby_user.dart';
 import '../models/group.dart';
@@ -49,8 +51,14 @@ class LobbyScreen extends StatefulWidget {
 
 enum LobbyQuickFilter { all, online, groups, alarmX }
 
-class _LobbyScreenState extends State<LobbyScreen>
-    with WidgetsBindingObserver {
+/// Minimum window width at which the lobby switches to the desktop two-pane
+/// layout (conversation list on the left, open chat on the right).
+const double _kDesktopTwoPaneBreakpoint = 900;
+
+/// Fixed width of the conversation-list sidebar in the desktop two-pane layout.
+const double _kDesktopSidebarWidth = 380;
+
+class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   List<LobbyUser> _lobbyUsers = [];
   List<LobbyUser> _filteredUsers = [];
   List<Group> _groups = []; // Group chats
@@ -83,6 +91,14 @@ class _LobbyScreenState extends State<LobbyScreen>
   /// The user ID of the chat currently open on top of the lobby.
   /// Used to suppress unread badge increments while viewing that conversation.
   int? _currentlyViewingChatUserId;
+
+  /// Whether the current window is wide enough for the desktop two-pane layout.
+  /// Updated from `build` and read by tap handlers to decide between selecting
+  /// the chat in the detail pane vs. pushing a full-screen route.
+  bool _isTwoPaneLayout = false;
+
+  /// The conversation shown in the detail pane in two-pane mode (null = none).
+  LobbyUser? _selectedChatUser;
   String? _activeIncomingCallRoomId;
   final Map<int, String> _crossDeviceActiveCallRoomByUserId = {};
 
@@ -119,11 +135,15 @@ class _LobbyScreenState extends State<LobbyScreen>
     _setupShareIntentListener();
     _setupShortcutLaunchListener();
     unawaited(_loadDeferredUpdateEntry());
-    VersionService.deferredUpdateSignal.addListener(_handleDeferredUpdateSignal);
+    VersionService.deferredUpdateSignal.addListener(
+      _handleDeferredUpdateSignal,
+    );
     // Listen for background download state changes (downloading / ready)
     BackgroundUpdateService().state.addListener(_handleBgUpdateStateChange);
     // Listen for in-app "Update available" prompt
-    BackgroundUpdateService().pendingInAppPrompt.addListener(_handleInAppPrompt);
+    BackgroundUpdateService().pendingInAppPrompt.addListener(
+      _handleInAppPrompt,
+    );
     // Handle any existing background update state (e.g. restored from persistence)
     _handleBgUpdateStateChange();
     // Periodically refresh "last seen" relative labels (like the web app does)
@@ -191,15 +211,25 @@ class _LobbyScreenState extends State<LobbyScreen>
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1E1E2E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Row(
             children: [
-              const Icon(Icons.system_update_alt_rounded, color: Color(0xFF00D9FF), size: 28),
+              const Icon(
+                Icons.system_update_alt_rounded,
+                color: Color(0xFF00D9FF),
+                size: 28,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   'Update v$version Available',
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -216,7 +246,11 @@ class _LobbyScreenState extends State<LobbyScreen>
                 const SizedBox(height: 12),
                 const Text(
                   "What's new:",
-                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 ConstrainedBox(
@@ -224,7 +258,10 @@ class _LobbyScreenState extends State<LobbyScreen>
                   child: SingleChildScrollView(
                     child: Text(
                       releaseNotes,
-                      style: const TextStyle(color: Colors.white60, fontSize: 13),
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ),
@@ -264,7 +301,9 @@ class _LobbyScreenState extends State<LobbyScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00D9FF),
                 foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               child: const Text(
                 'Download Now',
@@ -296,7 +335,9 @@ class _LobbyScreenState extends State<LobbyScreen>
       final resolvedUrl = payload['download_url']?.toString().trim() ?? '';
       if (info.version.isNotEmpty && resolvedUrl.isNotEmpty) {
         // Bring up the modal again instead of starting download immediately
-        _showUpdateDialog(InAppUpdatePrompt(info: info, downloadUrl: resolvedUrl));
+        _showUpdateDialog(
+          InAppUpdatePrompt(info: info, downloadUrl: resolvedUrl),
+        );
         return;
       }
     } catch (e) {
@@ -951,16 +992,18 @@ class _LobbyScreenState extends State<LobbyScreen>
       targetUser.id,
     );
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          otherUser: targetUser!,
-          initialCallInProgressOnOtherDevice: hasCrossDeviceCall,
-        ),
-      ),
-    ).then((_) {
-      _currentlyViewingChatUserId = null;
-    });
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              otherUser: targetUser!,
+              initialCallInProgressOnOtherDevice: hasCrossDeviceCall,
+            ),
+          ),
+        )
+        .then((_) {
+          _currentlyViewingChatUserId = null;
+        });
     _currentlyViewingChatUserId = targetUser.id;
   }
 
@@ -983,20 +1026,20 @@ class _LobbyScreenState extends State<LobbyScreen>
     try {
       // If the items arrived via a Direct Share shortcut tap, grab the target user id
       // so ShareTargetScreen can pre-select and auto-send without user interaction.
-      final directShareUserId = sharedItems
-          .map((i) => i.directShareUserId)
-          .firstWhere((id) => id != null, orElse: () => null) ??
+      final directShareUserId =
+          sharedItems
+              .map((i) => i.directShareUserId)
+              .firstWhere((id) => id != null, orElse: () => null) ??
           await ShareIntentService.instance.takePendingDirectShareUserId();
 
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) =>
-              ShareTargetScreen(
-                sharedItems: sharedItems,
-                users: _lobbyUsers,
-                directShareUserId: directShareUserId,
-              ),
+          builder: (context) => ShareTargetScreen(
+            sharedItems: sharedItems,
+            users: _lobbyUsers,
+            directShareUserId: directShareUserId,
+          ),
         ),
       );
 
@@ -1058,7 +1101,9 @@ class _LobbyScreenState extends State<LobbyScreen>
     // This ensures we capture any signals that arrive while setting up
     _socketService.onSignal = (signalData) {
       if (_isAcceptedOnOtherDeviceCancelSignalForActiveIncoming(signalData)) {
-        debugPrint('📴 Dismissing incoming call modal (accepted on other device via signal)');
+        debugPrint(
+          '📴 Dismissing incoming call modal (accepted on other device via signal)',
+        );
         _dismissIncomingCallModalIfOpen();
         PresenceService().isHandlingIncomingCall = false;
         return;
@@ -1109,15 +1154,17 @@ class _LobbyScreenState extends State<LobbyScreen>
         callService: callService,
         onDecline: () {
           debugPrint('📞 Call declined by user');
+          // Dismiss the incoming-call FCM/local notification immediately on
+          // self-decline (don't wait for the server's terminal echo).
+          unawaited(
+            FirebaseMessagingService.instance.clearIncomingCallNotifications(
+              otherUserId: callerId,
+              callRoomId: room,
+            ),
+          );
           _socketService.stopSignalBuffering();
-          _socketService.removeListener(
-            'callEnded',
-            crossRoomListenerKey,
-          );
-          _socketService.removeListener(
-            'callDeclined',
-            crossRoomListenerKey,
-          );
+          _socketService.removeListener('callEnded', crossRoomListenerKey);
+          _socketService.removeListener('callDeclined', crossRoomListenerKey);
         },
       ),
     );
@@ -1126,51 +1173,49 @@ class _LobbyScreenState extends State<LobbyScreen>
     _activeIncomingCallId = syntheticCallData['id'] as int?;
     _activeIncomingCallRoomId = room;
 
-    Navigator.of(context)
-        .push(route)
-        .then((result) {
-          // Clean up listeners when modal closes
-          _socketService.removeListener('callEnded', crossRoomListenerKey);
-          _socketService.removeListener('callDeclined', crossRoomListenerKey);
+    Navigator.of(context).push(route).then((result) {
+      // Clean up listeners when modal closes
+      _socketService.removeListener('callEnded', crossRoomListenerKey);
+      _socketService.removeListener('callDeclined', crossRoomListenerKey);
 
-          if (identical(_activeIncomingCallRoute, route)) {
-            _activeIncomingCallRoute = null;
-            _activeIncomingCallId = null;
-            _activeIncomingCallRoomId = null;
-          }
+      if (identical(_activeIncomingCallRoute, route)) {
+        _activeIncomingCallRoute = null;
+        _activeIncomingCallId = null;
+        _activeIncomingCallRoomId = null;
+      }
 
-          if (result is Map &&
-              (result['result'] == 'accepted' ||
-                  result['result'] == 'connected')) {
-            final localStream = result['localStream'];
-            final callerUser = _lobbyUsers.firstWhere(
-              (u) => u.id == callerId,
-              orElse: () => LobbyUser(
-                id: callerId,
-                username: callerUsername,
-                email: '',
-                firstName: callerUsername,
-                lastName: '',
-                fullName: callerUsername,
-                status: 'online',
-                isOnline: true,
-                isAdmin: false,
-                timezone: '',
-              ),
-            );
-            Navigator.of(context)
-                .push(
-                  MaterialPageRoute(
-                    fullscreenDialog: true,
-                    builder: (context) => ConnectedCallScreen(
-                      remoteName: callerUsername,
-                      callType: callType,
-                      callService: callService,
-                      localStream: localStream ?? callService.localStream,
-                      onChatPressed: () {
-                        Navigator.of(context).pop();
-                        _currentlyViewingChatUserId = callerUser.id;
-                        Navigator.of(context).push(
+      if (result is Map &&
+          (result['result'] == 'accepted' || result['result'] == 'connected')) {
+        final localStream = result['localStream'];
+        final callerUser = _lobbyUsers.firstWhere(
+          (u) => u.id == callerId,
+          orElse: () => LobbyUser(
+            id: callerId,
+            username: callerUsername,
+            email: '',
+            firstName: callerUsername,
+            lastName: '',
+            fullName: callerUsername,
+            status: 'online',
+            isOnline: true,
+            isAdmin: false,
+            timezone: '',
+          ),
+        );
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                fullscreenDialog: true,
+                builder: (context) => ConnectedCallScreen(
+                  remoteName: callerUsername,
+                  callType: callType,
+                  callService: callService,
+                  localStream: localStream ?? callService.localStream,
+                  onChatPressed: () {
+                    Navigator.of(context).pop();
+                    _currentlyViewingChatUserId = callerUser.id;
+                    Navigator.of(context)
+                        .push(
                           MaterialPageRoute(
                             builder: (_) => ChatScreen(
                               otherUser: callerUser,
@@ -1179,20 +1224,21 @@ class _LobbyScreenState extends State<LobbyScreen>
                                       .containsKey(callerUser.id),
                             ),
                           ),
-                        ).then((_) {
+                        )
+                        .then((_) {
                           _currentlyViewingChatUserId = null;
                         });
-                      },
-                    ),
-                  ),
-                )
-                .then((_) {
-                  _setupRealtimeListeners();
-                });
-          }
-          PresenceService().isHandlingIncomingCall = false;
-          _setupRealtimeListeners();
-        });
+                  },
+                ),
+              ),
+            )
+            .then((_) {
+              _setupRealtimeListeners();
+            });
+      }
+      PresenceService().isHandlingIncomingCall = false;
+      _setupRealtimeListeners();
+    });
   }
 
   /// Handle incoming call from another user
@@ -1253,7 +1299,9 @@ class _LobbyScreenState extends State<LobbyScreen>
     // Set up signal handler for WebRTC — buffered signals are replayed immediately
     _socketService.onSignal = (signalData) {
       if (_isAcceptedOnOtherDeviceCancelSignalForActiveIncoming(signalData)) {
-        debugPrint('📴 Dismissing incoming call modal (accepted on other device via signal)');
+        debugPrint(
+          '📴 Dismissing incoming call modal (accepted on other device via signal)',
+        );
         _dismissIncomingCallModalIfOpen();
         PresenceService().isHandlingIncomingCall = false;
         return;
@@ -1288,6 +1336,14 @@ class _LobbyScreenState extends State<LobbyScreen>
         callService: callService,
         onDecline: () {
           debugPrint('📞 Call declined by user');
+          // Dismiss the incoming-call FCM/local notification immediately on
+          // self-decline (don't wait for the server's terminal echo).
+          unawaited(
+            FirebaseMessagingService.instance.clearIncomingCallNotifications(
+              otherUserId: callerId,
+              callRoomId: callRoomId,
+            ),
+          );
           // Clean up listeners
           _socketService.removeListener('callEnded', callListenerKey);
           _socketService.removeListener('callDeclined', callListenerKey);
@@ -1299,52 +1355,50 @@ class _LobbyScreenState extends State<LobbyScreen>
     _activeIncomingCallId = callId;
     _activeIncomingCallRoomId = callRoomId;
 
-    Navigator.of(context)
-        .push(route)
-        .then((result) {
-          // Clean up listeners when modal closes
-          _socketService.removeListener('callEnded', callListenerKey);
-          _socketService.removeListener('callDeclined', callListenerKey);
+    Navigator.of(context).push(route).then((result) {
+      // Clean up listeners when modal closes
+      _socketService.removeListener('callEnded', callListenerKey);
+      _socketService.removeListener('callDeclined', callListenerKey);
 
-          if (identical(_activeIncomingCallRoute, route)) {
-            _activeIncomingCallRoute = null;
-            _activeIncomingCallId = null;
-            _activeIncomingCallRoomId = null;
-          }
+      if (identical(_activeIncomingCallRoute, route)) {
+        _activeIncomingCallRoute = null;
+        _activeIncomingCallId = null;
+        _activeIncomingCallRoomId = null;
+      }
 
-          if (result is Map &&
-              (result['result'] == 'accepted' ||
-                  result['result'] == 'connected')) {
-            // Navigate to connected call screen with the local stream from setup
-            final localStream = result['localStream'];
-            final callerUser = _lobbyUsers.firstWhere(
-              (u) => u.id == callerId,
-              orElse: () => LobbyUser(
-                id: callerId,
-                username: callerName,
-                email: '',
-                firstName: callerName,
-                lastName: '',
-                fullName: callerName,
-                status: 'online',
-                isOnline: true,
-                isAdmin: false,
-                timezone: '',
-              ),
-            );
-            Navigator.of(context)
-                .push(
-                  MaterialPageRoute(
-                    fullscreenDialog: true,
-                    builder: (context) => ConnectedCallScreen(
-                      remoteName: callerName,
-                      callType: callType,
-                      callService: callService,
-                      localStream: localStream ?? callService.localStream,
-                      onChatPressed: () {
-                        Navigator.of(context).pop();
-                        _currentlyViewingChatUserId = callerUser.id;
-                        Navigator.of(context).push(
+      if (result is Map &&
+          (result['result'] == 'accepted' || result['result'] == 'connected')) {
+        // Navigate to connected call screen with the local stream from setup
+        final localStream = result['localStream'];
+        final callerUser = _lobbyUsers.firstWhere(
+          (u) => u.id == callerId,
+          orElse: () => LobbyUser(
+            id: callerId,
+            username: callerName,
+            email: '',
+            firstName: callerName,
+            lastName: '',
+            fullName: callerName,
+            status: 'online',
+            isOnline: true,
+            isAdmin: false,
+            timezone: '',
+          ),
+        );
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                fullscreenDialog: true,
+                builder: (context) => ConnectedCallScreen(
+                  remoteName: callerName,
+                  callType: callType,
+                  callService: callService,
+                  localStream: localStream ?? callService.localStream,
+                  onChatPressed: () {
+                    Navigator.of(context).pop();
+                    _currentlyViewingChatUserId = callerUser.id;
+                    Navigator.of(context)
+                        .push(
                           MaterialPageRoute(
                             builder: (_) => ChatScreen(
                               otherUser: callerUser,
@@ -1353,20 +1407,21 @@ class _LobbyScreenState extends State<LobbyScreen>
                                       .containsKey(callerUser.id),
                             ),
                           ),
-                        ).then((_) {
+                        )
+                        .then((_) {
                           _currentlyViewingChatUserId = null;
                         });
-                      },
-                    ),
-                  ),
-                )
-                .then((_) {
-                  _setupRealtimeListeners();
-                });
-          }
-          PresenceService().isHandlingIncomingCall = false;
-          _setupRealtimeListeners();
-        });
+                  },
+                ),
+              ),
+            )
+            .then((_) {
+              _setupRealtimeListeners();
+            });
+      }
+      PresenceService().isHandlingIncomingCall = false;
+      _setupRealtimeListeners();
+    });
   }
 
   bool _isCallAnsweredForActiveIncomingModal(Map<String, dynamic> data) {
@@ -1542,20 +1597,30 @@ class _LobbyScreenState extends State<LobbyScreen>
 
   String? _buildRealtimeEventKey(Map<String, dynamic> data) {
     final explicitId =
-        data['message_id'] ?? data['id'] ?? data['event_id'] ?? data['notification_id'];
+        data['message_id'] ??
+        data['id'] ??
+        data['event_id'] ??
+        data['notification_id'];
     final normalizedType = _normalizedRealtimeType(data);
 
     if (explicitId != null) {
       return '$normalizedType:$explicitId';
     }
 
-    final senderId = data['sender_id']?.toString() ?? data['user_id']?.toString() ?? '';
+    final senderId =
+        data['sender_id']?.toString() ?? data['user_id']?.toString() ?? '';
     final groupId = data['group_id']?.toString() ?? '';
     final timestamp = _extractEventTimestamp(data) ?? '';
     final content =
-        data['content']?.toString() ?? data['file_name']?.toString() ?? data['duration']?.toString() ?? '';
+        data['content']?.toString() ??
+        data['file_name']?.toString() ??
+        data['duration']?.toString() ??
+        '';
 
-    if (senderId.isEmpty && groupId.isEmpty && timestamp.isEmpty && content.isEmpty) {
+    if (senderId.isEmpty &&
+        groupId.isEmpty &&
+        timestamp.isEmpty &&
+        content.isEmpty) {
       return null;
     }
 
@@ -1712,9 +1777,9 @@ class _LobbyScreenState extends State<LobbyScreen>
           isOnline: user.isOnline,
           isAdmin: user.isAdmin,
           timezone: user.timezone,
-            // Keep unread count unchanged; read state should only change via
-            // explicit read sync (socket/API), not local UI assumptions.
-            unreadCount: user.unreadCount,
+          // Keep unread count unchanged; read state should only change via
+          // explicit read sync (socket/API), not local UI assumptions.
+          unreadCount: user.unreadCount,
           isContact: user.isContact,
           isAdminUser: user.isAdminUser,
           // 🆕 NEW: Update last message info (sent by current user)
@@ -1747,8 +1812,9 @@ class _LobbyScreenState extends State<LobbyScreen>
     if (_isDuplicateRealtimeEvent(data)) return;
 
     final duration = data['duration'] as int?;
-    final voicePreview =
-        duration != null ? "🎤 Voice ${duration}s" : "🎤 Voice message";
+    final voicePreview = duration != null
+        ? "🎤 Voice ${duration}s"
+        : "🎤 Voice message";
     _applyConversationActivity(data, preview: voicePreview);
   }
 
@@ -1858,7 +1924,9 @@ class _LobbyScreenState extends State<LobbyScreen>
       _handleDeferredUpdateSignal,
     );
     BackgroundUpdateService().state.removeListener(_handleBgUpdateStateChange);
-    BackgroundUpdateService().pendingInAppPrompt.removeListener(_handleInAppPrompt);
+    BackgroundUpdateService().pendingInAppPrompt.removeListener(
+      _handleInAppPrompt,
+    );
     // Clear all lobby socket listeners to prevent memory leaks
     _socketService.removeListenersForKey('lobby');
     super.dispose();
@@ -1958,7 +2026,9 @@ class _LobbyScreenState extends State<LobbyScreen>
 
     final prefs = await SharedPreferences.getInstance();
     String? aiLastMessageTime = prefs.getString('ai_last_message_time_$userId');
-    String? aiLastMessagePreview = prefs.getString('ai_last_message_preview_$userId');
+    String? aiLastMessagePreview = prefs.getString(
+      'ai_last_message_preview_$userId',
+    );
 
     // Always try fetching the latest message from the server to stay in sync
     // with conversations that may have happened on web or other devices.
@@ -1966,49 +2036,64 @@ class _LobbyScreenState extends State<LobbyScreen>
       final token = await StorageService.getToken();
       if (token != null) {
         final baseUrl = ApiConfig.baseUrl.trim().endsWith('/')
-            ? ApiConfig.baseUrl.trim().substring(0, ApiConfig.baseUrl.trim().length - 1)
+            ? ApiConfig.baseUrl.trim().substring(
+                0,
+                ApiConfig.baseUrl.trim().length - 1,
+              )
             : ApiConfig.baseUrl.trim();
         // Fetch current session
-        final sessionRes = await http.get(
-          Uri.parse('$baseUrl/api/ai/sessions/current'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $token',
-          },
-        ).timeout(ApiConfig.connectionTimeout);
+        final sessionRes = await http
+            .get(
+              Uri.parse('$baseUrl/api/ai/sessions/current'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $token',
+              },
+            )
+            .timeout(ApiConfig.connectionTimeout);
 
         if (sessionRes.statusCode == 200 || sessionRes.statusCode == 201) {
-          final sessionPayload = jsonDecode(sessionRes.body) as Map<String, dynamic>;
+          final sessionPayload =
+              jsonDecode(sessionRes.body) as Map<String, dynamic>;
           final session = sessionPayload['session'] as Map<String, dynamic>?;
           final sessionId = session?['id'] ?? sessionPayload['id'];
 
           if (sessionId != null) {
             // Fetch messages for this session
-            final msgRes = await http.get(
-              Uri.parse('$baseUrl/api/ai/sessions/$sessionId/messages'),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-            ).timeout(ApiConfig.connectionTimeout);
+            final msgRes = await http
+                .get(
+                  Uri.parse('$baseUrl/api/ai/sessions/$sessionId/messages'),
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer $token',
+                  },
+                )
+                .timeout(ApiConfig.connectionTimeout);
 
             if (msgRes.statusCode == 200) {
-              final msgPayload = jsonDecode(msgRes.body) as Map<String, dynamic>;
-              final rawMessages = (msgPayload['messages'] as List<dynamic>? ?? <dynamic>[]);
+              final msgPayload =
+                  jsonDecode(msgRes.body) as Map<String, dynamic>;
+              final rawMessages =
+                  (msgPayload['messages'] as List<dynamic>? ?? <dynamic>[]);
 
               if (rawMessages.isNotEmpty) {
                 // Get the last message (most recent)
                 final lastMsg = rawMessages.last as Map<String, dynamic>;
                 final role = lastMsg['role'] as String? ?? '';
                 final content = (lastMsg['content'] as String? ?? '').trim();
-                final timestamp = lastMsg['created_at'] as String? ??
-                    lastMsg['timestamp'] as String? ?? '';
+                final timestamp =
+                    lastMsg['created_at'] as String? ??
+                    lastMsg['timestamp'] as String? ??
+                    '';
 
                 if (content.isNotEmpty) {
                   if (role == 'user') {
-                    aiLastMessagePreview = 'You: ${content.length > 50 ? '${content.substring(0, 50)}...' : content}';
+                    aiLastMessagePreview =
+                        'You: ${content.length > 50 ? '${content.substring(0, 50)}...' : content}';
                   } else {
-                    aiLastMessagePreview = content.length > 60 ? '${content.substring(0, 60)}...' : content;
+                    aiLastMessagePreview = content.length > 60
+                        ? '${content.substring(0, 60)}...'
+                        : content;
                   }
                   if (timestamp.isNotEmpty) {
                     aiLastMessageTime = timestamp;
@@ -2016,9 +2101,15 @@ class _LobbyScreenState extends State<LobbyScreen>
 
                   // Cache for next time
                   if (aiLastMessageTime != null) {
-                    prefs.setString('ai_last_message_time_$userId', aiLastMessageTime!);
+                    prefs.setString(
+                      'ai_last_message_time_$userId',
+                      aiLastMessageTime!,
+                    );
                   }
-                  prefs.setString('ai_last_message_preview_$userId', aiLastMessagePreview!);
+                  prefs.setString(
+                    'ai_last_message_preview_$userId',
+                    aiLastMessagePreview!,
+                  );
                 }
               }
             }
@@ -2121,9 +2212,9 @@ class _LobbyScreenState extends State<LobbyScreen>
     final shouldUseCachedMessage =
         !hasCurrentPreview ||
         !hasCurrentTime ||
-        _parseMessageTime(cachedTimestamp).isAfter(
-          _parseMessageTime(selfUser.lastMessageTime),
-        );
+        _parseMessageTime(
+          cachedTimestamp,
+        ).isAfter(_parseMessageTime(selfUser.lastMessageTime));
     if (!shouldUseCachedMessage) {
       return users;
     }
@@ -2261,9 +2352,12 @@ class _LobbyScreenState extends State<LobbyScreen>
     final builders = <Widget Function()>[];
 
     if (!includeAi) {
-      builders.addAll(users.map(
-        (user) => () => _buildUserTile(user, isOnlineSection: isOnlineSection),
-      ));
+      builders.addAll(
+        users.map(
+          (user) =>
+              () => _buildUserTile(user, isOnlineSection: isOnlineSection),
+        ),
+      );
       return builders;
     }
 
@@ -2299,39 +2393,51 @@ class _LobbyScreenState extends State<LobbyScreen>
     if (_activeFilter == LobbyQuickFilter.groups) {
       if (_filteredGroups.isNotEmpty) {
         items.add(_buildGroupsSectionHeader);
-        items.addAll(_filteredGroups.map(
-          (group) => () => _buildGroupTile(group),
-        ));
+        items.addAll(
+          _filteredGroups.map(
+            (group) =>
+                () => _buildGroupTile(group),
+          ),
+        );
       }
       return items;
     }
 
     if (_activeFilter != LobbyQuickFilter.all &&
         _activeFilter != LobbyQuickFilter.groups) {
-      items.add(() => _buildSectionHeader(
-            selectedSectionTitle,
-            selectedUsers.length,
-            selectedSectionColor,
-          ));
+      items.add(
+        () => _buildSectionHeader(
+          selectedSectionTitle,
+          selectedUsers.length,
+          selectedSectionColor,
+        ),
+      );
     }
 
     if (_activeFilter == LobbyQuickFilter.all) {
       if (_filteredGroups.isNotEmpty) {
         items.add(_buildGroupsSectionHeader);
-        items.addAll(_filteredGroups.map(
-          (group) => () => _buildGroupTile(group),
-        ));
+        items.addAll(
+          _filteredGroups.map(
+            (group) =>
+                () => _buildGroupTile(group),
+          ),
+        );
       }
-      items.addAll(_buildSortedUserAndAiTileBuilders(
-        selectedUsers,
-        includeAi: showAiChatTile,
-      ));
+      items.addAll(
+        _buildSortedUserAndAiTileBuilders(
+          selectedUsers,
+          includeAi: showAiChatTile,
+        ),
+      );
     } else {
-      items.addAll(_buildSortedUserAndAiTileBuilders(
-        selectedUsers,
-        includeAi: showAiChatTile,
-        isOnlineSection: _activeFilter == LobbyQuickFilter.online,
-      ));
+      items.addAll(
+        _buildSortedUserAndAiTileBuilders(
+          selectedUsers,
+          includeAi: showAiChatTile,
+          isOnlineSection: _activeFilter == LobbyQuickFilter.online,
+        ),
+      );
     }
 
     return items;
@@ -2421,9 +2527,7 @@ class _LobbyScreenState extends State<LobbyScreen>
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const AiChatScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const AiChatScreen()),
               ).then((_) {
                 _loadAiSessionPresence();
                 _loadLobby(useCacheFirst: false);
@@ -2499,15 +2603,11 @@ class _LobbyScreenState extends State<LobbyScreen>
     if (selfUser == null || !mounted) return;
     final target = selfUser;
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(otherUser: target),
-      ),
-    ).then((_) {
-      _currentlyViewingChatUserId = null;
-      _loadLobby(useCacheFirst: false);
-    });
-    _currentlyViewingChatUserId = id;
+    _openChat(
+      target,
+      callInProgress: false,
+      onReturn: () async => _loadLobby(useCacheFirst: false),
+    );
   }
 
   /// Parse a timestamp string, treating it as UTC if no timezone info is present
@@ -2544,7 +2644,8 @@ class _LobbyScreenState extends State<LobbyScreen>
 
       if (!dateTime.isBefore(todayStart)) return timeStr;
       if (!dateTime.isBefore(yesterdayStart)) return 'Yesterday $timeStr';
-      if (difference.inDays < 7) return '${_weekdayShort(dateTime.weekday)} $timeStr';
+      if (difference.inDays < 7)
+        return '${_weekdayShort(dateTime.weekday)} $timeStr';
       return '${dateTime.month}/${dateTime.day}';
     } catch (e) {
       return '';
@@ -2642,7 +2743,9 @@ class _LobbyScreenState extends State<LobbyScreen>
                           itemCount: contacts.length,
                           itemBuilder: (_, index) {
                             final user = contacts[index];
-                            final avatarColor = _getAvatarColor(user.avatarColorIndex);
+                            final avatarColor = _getAvatarColor(
+                              user.avatarColorIndex,
+                            );
                             final s = _compactScale(context);
                             return ListTile(
                               dense: true,
@@ -2710,22 +2813,13 @@ class _LobbyScreenState extends State<LobbyScreen>
                                   : null,
                               onTap: () {
                                 Navigator.pop(ctx);
-                                _currentlyViewingChatUserId = user.id;
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ChatScreen(
-                                      otherUser: user,
-                                      initialCallInProgressOnOtherDevice:
-                                          _crossDeviceActiveCallRoomByUserId
-                                              .containsKey(user.id),
-                                    ),
-                                  ),
-                                ).then((_) {
-                                  _currentlyViewingChatUserId = null;
-                                  _loadLobby(useCacheFirst: false);
-                                  _setupRealtimeListeners();
-                                });
+                                _openChat(
+                                  user,
+                                  onReturn: () async {
+                                    _loadLobby(useCacheFirst: false);
+                                    _setupRealtimeListeners();
+                                  },
+                                );
                               },
                             );
                           },
@@ -3047,9 +3141,7 @@ class _LobbyScreenState extends State<LobbyScreen>
     return ListView.builder(
       itemCount: 8,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      physics: const ChatScrollPhysics(
-        parent: AlwaysScrollableScrollPhysics(),
-      ),
+      physics: const ChatScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       addAutomaticKeepAlives: false,
       addRepaintBoundaries: true,
       itemBuilder: (_, __) {
@@ -3058,6 +3150,270 @@ class _LobbyScreenState extends State<LobbyScreen>
           child: _buildShimmerTile(),
         );
       },
+    );
+  }
+
+  /// Opens a 1:1 conversation. In the desktop two-pane layout this selects the
+  /// chat in the detail pane; otherwise it pushes a full-screen route (the
+  /// historical mobile behavior). [onReturn] runs after the pushed route is
+  /// popped; it is ignored in two-pane mode where there is nothing to pop.
+  void _openChat(
+    LobbyUser user, {
+    bool? callInProgress,
+    Future<void> Function()? onReturn,
+  }) {
+    final inCall =
+        callInProgress ??
+        _crossDeviceActiveCallRoomByUserId.containsKey(user.id);
+    _currentlyViewingChatUserId = user.id;
+
+    if (_isTwoPaneLayout) {
+      setState(() => _selectedChatUser = user);
+      // The conversation is now visible beside the list, so run the "opened"
+      // side-effects (clear unread badge, mark messages read) immediately
+      // instead of waiting for a route to pop.
+      if (onReturn != null) unawaited(onReturn());
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          otherUser: user,
+          initialCallInProgressOnOtherDevice: inCall,
+        ),
+      ),
+    ).then((_) async {
+      _currentlyViewingChatUserId = null;
+      if (onReturn != null) {
+        await onReturn();
+      } else {
+        _loadLobby(useCacheFirst: false);
+      }
+    });
+  }
+
+  /// The right-hand detail pane in the desktop two-pane layout.
+  Widget _buildChatDetailPane() {
+    final user = _selectedChatUser;
+    if (user == null) {
+      return Container(
+        color: const Color(0xFF15152A),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.forum_outlined,
+                size: 72,
+                color: Colors.white.withValues(alpha: 0.15),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Select a conversation',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Pick someone from the list to start chatting',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return ChatScreen(
+      // Rebuild the chat state when the selected conversation changes.
+      key: ValueKey('desktop-chat-${user.id}'),
+      otherUser: user,
+      embedded: true,
+      initialCallInProgressOnOtherDevice: _crossDeviceActiveCallRoomByUserId
+          .containsKey(user.id),
+    );
+  }
+
+  /// A single rounded pill button for the desktop top bar (web-style chrome).
+  Widget _topBarPill({
+    required Widget child,
+    required Color color,
+    VoidCallback? onTap,
+    double? width,
+    bool expand = false,
+  }) {
+    Widget content = Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: child,
+    );
+    if (onTap != null) {
+      content = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: content,
+        ),
+      );
+    }
+    return expand ? Expanded(child: content) : content;
+  }
+
+  /// The web-style top bar shown only on desktop: CHATX title plus the
+  /// Alarm / Client URL / Version / Settings / Logout pills.
+  Widget _buildDesktopTopBar() {
+    const labelStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+    );
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: Color(0xFF121212),
+        border: Border(bottom: BorderSide(color: Color(0xFF374151))),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          _topBarPill(
+            width: 170,
+            color: const Color(0xFF0F172A),
+            child: const Text(
+              'CHATX',
+              style: TextStyle(
+                color: Color(0xFFF1F5F9),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _topBarPill(
+            color: const Color(0xFF7C3AED),
+            onTap: () => _setActiveFilter(3),
+            child: const Text('Alarm', style: labelStyle),
+          ),
+          const SizedBox(width: 10),
+          _topBarPill(
+            expand: true,
+            color: const Color(0xFF3730A3),
+            onTap: () async {
+              await Clipboard.setData(ClipboardData(text: ApiConfig.baseUrl));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Client URL copied')),
+              );
+            },
+            child: Text(
+              'Client: ${ApiConfig.baseUrl}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: labelStyle,
+            ),
+          ),
+          const SizedBox(width: 10),
+          _topBarPill(
+            color: const Color(0xFF065F46),
+            child: FutureBuilder<PackageInfo>(
+              future: PackageInfo.fromPlatform(),
+              builder: (context, snapshot) => Text(
+                snapshot.hasData
+                    ? 'App Version: ${snapshot.data!.version}'
+                    : 'App Version: …',
+                style: labelStyle,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _topBarPill(
+            color: const Color(0xFFB45309),
+            onTap: () async {
+              final result = await showDialog<bool>(
+                context: context,
+                builder: (context) => const SettingsModal(),
+              );
+              if (result == true && mounted) setState(() {});
+            },
+            child: const Text('Settings', style: labelStyle),
+          ),
+          const SizedBox(width: 10),
+          _topBarPill(
+            color: const Color(0xFFDC2626),
+            onTap: _handleLogout,
+            child: const Text('Logout', style: labelStyle),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Compact filter chips for the desktop sidebar, replacing the bottom nav
+  /// (which is hidden on desktop). Alarm X lives in the top bar instead.
+  Widget _buildDesktopFilterChips() {
+    Widget chip(String label, LobbyQuickFilter filter, Color color, int index) {
+      final selected = _activeFilter == filter;
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _setActiveFilter(index),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected
+                    ? color.withValues(alpha: 0.18)
+                    : const Color(0xFF1F1F33),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected ? color : Colors.transparent,
+                  width: 1.4,
+                ),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: selected ? color : Colors.white70,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Row(
+        children: [
+          chip('Chats', LobbyQuickFilter.all, const Color(0xFF00D9FF), 0),
+          const SizedBox(width: 8),
+          chip('Online', LobbyQuickFilter.online, const Color(0xFF00E676), 1),
+          const SizedBox(width: 8),
+          chip('Groups', LobbyQuickFilter.groups, const Color(0xFF00D9FF), 2),
+        ],
+      ),
     );
   }
 
@@ -3101,10 +3457,11 @@ class _LobbyScreenState extends State<LobbyScreen>
     final query = _searchController.text.trim().toLowerCase();
     final aiKeywords = <String>['ask ai', 'ai', 'assistant', 'ai chat'];
     final aiMatchesQuery =
-      query.isEmpty || aiKeywords.any((keyword) => keyword.contains(query));
+        query.isEmpty || aiKeywords.any((keyword) => keyword.contains(query));
     final showAiChatTile =
-      (_activeFilter == LobbyQuickFilter.all ||
-       _activeFilter == LobbyQuickFilter.online) && aiMatchesQuery;
+        (_activeFilter == LobbyQuickFilter.all ||
+            _activeFilter == LobbyQuickFilter.online) &&
+        aiMatchesQuery;
     final hasVisibleResults = !isFilterEmpty || showAiChatTile;
     final lobbyItemBuilders = _buildLobbyListItemBuilders(
       selectedUsers,
@@ -3113,58 +3470,77 @@ class _LobbyScreenState extends State<LobbyScreen>
       showAiChatTile,
     );
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A2E),
-        elevation: 0,
-        centerTitle: true,
-        leading: _buildDeferredUpdateIndicator(),
-        title: const AppVersionText(),
-        actions: [
-          PopupMenuButton<String>(
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.0),
-              child: Center(
-                child: Text(
-                  'Settings',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
+    // On desktop the web-style top bar (built in the LayoutBuilder below)
+    // replaces the mobile app bar + bottom navigation, so suppress those here.
+    final bool isDesktop =
+        MediaQuery.sizeOf(context).width >= _kDesktopTwoPaneBreakpoint;
+
+    final Widget lobbyPane = Scaffold(
+      // Web sidebar uses a near-black background (#121212); mobile keeps navy.
+      backgroundColor: isDesktop
+          ? const Color(0xFF121212)
+          : const Color(0xFF1A1A2E),
+      appBar: isDesktop
+          ? null
+          : AppBar(
+              backgroundColor: const Color(0xFF1A1A2E),
+              elevation: 0,
+              centerTitle: true,
+              leading: _buildDeferredUpdateIndicator(),
+              title: const AppVersionText(),
+              actions: [
+                PopupMenuButton<String>(
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Center(
+                      child: Text(
+                        'Settings',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   ),
+                  color: const Color(0xFF252542),
+                  onSelected: (value) async {
+                    if (value == 'settings') {
+                      final result = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => const SettingsModal(),
+                      );
+                      if (result == true && mounted) {
+                        setState(() {});
+                      }
+                    } else if (value == 'logout') {
+                      _handleLogout();
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(
+                      value: 'settings',
+                      child: Text(
+                        'Timestamp settings',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'logout',
+                      child: Text(
+                        'Logout',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
+              ],
             ),
-            color: const Color(0xFF252542),
-            onSelected: (value) async {
-              if (value == 'settings') {
-                final result = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => const SettingsModal(),
-                );
-                if (result == true && mounted) {
-                  setState(() {});
-                }
-              } else if (value == 'logout') {
-                _handleLogout();
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem<String>(
-                value: 'settings',
-                child: Text('Timestamp settings', style: TextStyle(color: Colors.white)),
-              ),
-              PopupMenuItem<String>(
-                value: 'logout',
-                child: Text('Logout', style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          ),
-        ],
-      ),
       body: Column(
         children: [
+          // Desktop filter chips (the bottom nav is hidden on desktop).
+          if (isDesktop && _activeFilter != LobbyQuickFilter.alarmX)
+            _buildDesktopFilterChips(),
           // Search bar
           if (_activeFilter != LobbyQuickFilter.alarmX)
             Padding(
@@ -3188,9 +3564,8 @@ class _LobbyScreenState extends State<LobbyScreen>
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => AiChatScreen(
-                                    initialPrompt: query,
-                                  ),
+                                  builder: (_) =>
+                                      AiChatScreen(initialPrompt: query),
                                 ),
                               ).then((_) {
                                 _loadAiSessionPresence();
@@ -3235,114 +3610,163 @@ class _LobbyScreenState extends State<LobbyScreen>
             child: _activeFilter == LobbyQuickFilter.alarmX
                 ? const PomodoroView()
                 : (_isLoading && _lobbyUsers.isEmpty && _groups.isEmpty)
-                    ? _buildLoadingPlaceholder()
-                    : !hasVisibleResults
-                        ? Center(
-                            child: Text(
-                              _searchController.text.isEmpty
-                                  ? _activeFilter == LobbyQuickFilter.all
-                                      ? 'No chats yet'
-                                      : 'No ${selectedSectionTitle.toLowerCase()} yet'
-                                  : 'No results found',
-                              style: TextStyle(color: Colors.grey[500], fontSize: 16),
-                            ),
-                          )
-                        : RefreshIndicator(
-                            onRefresh: () => _loadLobby(useCacheFirst: false),
-                            color: const Color(0xFF00D9FF),
-                            backgroundColor: const Color(0xFF252542),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              physics: const ChatScrollPhysics(
-                                parent: AlwaysScrollableScrollPhysics(),
-                              ),
-                              cacheExtent: MediaQuery.sizeOf(context).height * 2,
-                              addAutomaticKeepAlives: false,
-                              addRepaintBoundaries: true,
-                              itemCount: lobbyItemBuilders.length,
-                              itemBuilder: (context, index) {
-                                return lobbyItemBuilders[index]();
-                              },
-                            ),
-                          ),
+                ? _buildLoadingPlaceholder()
+                : !hasVisibleResults
+                ? Center(
+                    child: Text(
+                      _searchController.text.isEmpty
+                          ? _activeFilter == LobbyQuickFilter.all
+                                ? 'No chats yet'
+                                : 'No ${selectedSectionTitle.toLowerCase()} yet'
+                          : 'No results found',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 16),
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: () => _loadLobby(useCacheFirst: false),
+                    color: const Color(0xFF00D9FF),
+                    backgroundColor: const Color(0xFF252542),
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      physics: const ChatScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics(),
+                      ),
+                      cacheExtent: MediaQuery.sizeOf(context).height * 2,
+                      addAutomaticKeepAlives: false,
+                      addRepaintBoundaries: true,
+                      itemCount: lobbyItemBuilders.length,
+                      itemBuilder: (context, index) {
+                        return lobbyItemBuilders[index]();
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
       floatingActionButton: (_activeFilter == LobbyQuickFilter.alarmX)
           ? null
           : (_activeFilter != LobbyQuickFilter.groups)
-              ? Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Self (message yourself) mini FAB
-                    _buildSelfFab(),
-                    const SizedBox(height: 12),
-                    // AI Chat mini FAB (matches the lobby list's gradient bot avatar)
-                    _buildAiFab(),
-                    const SizedBox(height: 12),
-                    // New Chat main FAB
-                    FloatingActionButton(
-                      heroTag: 'fab_chat',
-                      onPressed: _openNewChatPicker,
-                      backgroundColor: const Color(0xFF4C1D95),
-                      foregroundColor: Colors.white,
-                      elevation: 6,
-                      shape: const CircleBorder(),
-                      child: const Icon(Icons.chat_rounded, size: 26),
-                    ),
-                  ],
-                )
-              : (_isCurrentUserAdmin
-                  ? FloatingActionButton(
-                      heroTag: 'fab_group',
-                      onPressed: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const CreateGroupScreen(),
-                          ),
-                        );
-                        if (result == true) {
-                          _loadLobby(useCacheFirst: false);
-                        }
-                      },
-                      backgroundColor: const Color(0xFF4C1D95),
-                      foregroundColor: Colors.white,
-                      elevation: 6,
-                      shape: const CircleBorder(),
-                      child: const Icon(Icons.group_add_rounded, size: 26),
-                    )
-                  : null),
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Self (message yourself) mini FAB
+                _buildSelfFab(),
+                const SizedBox(height: 12),
+                // AI Chat mini FAB (matches the lobby list's gradient bot avatar)
+                _buildAiFab(),
+                const SizedBox(height: 12),
+                // New Chat main FAB
+                FloatingActionButton(
+                  heroTag: 'fab_chat',
+                  onPressed: _openNewChatPicker,
+                  backgroundColor: const Color(0xFF4C1D95),
+                  foregroundColor: Colors.white,
+                  elevation: 6,
+                  shape: const CircleBorder(),
+                  child: const Icon(Icons.chat_rounded, size: 26),
+                ),
+              ],
+            )
+          : (_isCurrentUserAdmin
+                ? FloatingActionButton(
+                    heroTag: 'fab_group',
+                    onPressed: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const CreateGroupScreen(),
+                        ),
+                      );
+                      if (result == true) {
+                        _loadLobby(useCacheFirst: false);
+                      }
+                    },
+                    backgroundColor: const Color(0xFF4C1D95),
+                    foregroundColor: Colors.white,
+                    elevation: 6,
+                    shape: const CircleBorder(),
+                    child: const Icon(Icons.group_add_rounded, size: 26),
+                  )
+                : null),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: const Color(0xFF1A1A2E),
-        indicatorColor: const Color(0xFF252542),
-        selectedIndex: _activeFilterIndex(),
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        onDestinationSelected: _setActiveFilter,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard, color: Color(0xFF00D9FF)),
-            label: 'Chats',
+      bottomNavigationBar: isDesktop
+          ? null
+          : NavigationBar(
+              backgroundColor: const Color(0xFF1A1A2E),
+              indicatorColor: const Color(0xFF252542),
+              selectedIndex: _activeFilterIndex(),
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              onDestinationSelected: _setActiveFilter,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.dashboard_outlined),
+                  selectedIcon: Icon(Icons.dashboard, color: Color(0xFF00D9FF)),
+                  label: 'Chats',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.circle_outlined),
+                  selectedIcon: Icon(Icons.circle, color: Color(0xFF00E676)),
+                  label: 'Online',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.groups_outlined),
+                  selectedIcon: Icon(Icons.groups, color: Color(0xFF00D9FF)),
+                  label: 'Groups',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.alarm_outlined),
+                  selectedIcon: Icon(Icons.alarm, color: Colors.orange),
+                  label: 'Alarm X',
+                ),
+              ],
+            ),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final desktop = constraints.maxWidth >= _kDesktopTwoPaneBreakpoint;
+        // The Alarm X (Not Pomodoro) suite needs the full width — don't squeeze
+        // it into the narrow sidebar, so only show the chat detail pane when not
+        // on the Alarm X tab.
+        final twoPane = desktop && _activeFilter != LobbyQuickFilter.alarmX;
+        // Keep tap handlers in sync with the active layout. Safe to set here
+        // (no rebuild needed) because the layout below already uses `twoPane`.
+        _isTwoPaneLayout = twoPane;
+
+        // Mobile keeps its app bar + bottom navigation inside lobbyPane.
+        if (!desktop) {
+          return lobbyPane;
+        }
+
+        // Desktop: web-style top bar above the content. When a 1:1 chat tab is
+        // active we show the conversation list beside the chat detail pane;
+        // Alarm X takes the full width.
+        final Widget content = twoPane
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: _kDesktopSidebarWidth, child: lobbyPane),
+                  // Web sidebar's purple right border (2px #420796).
+                  const VerticalDivider(
+                    width: 2,
+                    thickness: 2,
+                    color: Color(0xFF420796),
+                  ),
+                  Expanded(child: _buildChatDetailPane()),
+                ],
+              )
+            : lobbyPane;
+
+        return Scaffold(
+          backgroundColor: const Color(0xFF121212),
+          body: Column(
+            children: [
+              _buildDesktopTopBar(),
+              Expanded(child: content),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.circle_outlined),
-            selectedIcon: Icon(Icons.circle, color: Color(0xFF00E676)),
-            label: 'Online',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.groups_outlined),
-            selectedIcon: Icon(Icons.groups, color: Color(0xFF00D9FF)),
-            label: 'Groups',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.alarm_outlined),
-            selectedIcon: Icon(Icons.alarm, color: Colors.orange),
-            label: 'Alarm X',
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -3396,15 +3820,18 @@ class _LobbyScreenState extends State<LobbyScreen>
     final currentUserId = _socketService.currentUserId;
     if (currentUserId == null || !mounted) return;
 
-    final state = (data['state']?.toString() ?? data['status']?.toString() ?? '')
-        .toLowerCase();
+    final state =
+        (data['state']?.toString() ?? data['status']?.toString() ?? '')
+            .toLowerCase();
     if (state.isEmpty) return;
 
-    final roomId = data['call_room_id']?.toString() ?? data['room']?.toString() ?? '';
+    final roomId =
+        data['call_room_id']?.toString() ?? data['room']?.toString() ?? '';
     final actorUserId = _toInt(data['actor_user_id']);
     final otherUserId = _extractOtherParticipantIdFromSessionState(data);
 
-    final isTerminal = state == 'ended' || state == 'declined' || state == 'cancelled';
+    final isTerminal =
+        state == 'ended' || state == 'declined' || state == 'cancelled';
 
     // The current user is in an accepted call on ANOTHER device whenever this
     // device isn't the one in the call. The actor of 'accepted' is whoever
@@ -3434,7 +3861,14 @@ class _LobbyScreenState extends State<LobbyScreen>
     }
 
     if (isTerminal) {
-      if (otherUserId != null && _crossDeviceActiveCallRoomByUserId.containsKey(otherUserId)) {
+      // A declined/ended/cancelled call must dismiss the incoming-call FCM/local
+      // notification too. The server echoes the terminal call_session_state to
+      // BOTH participants' personal rooms, so this clears the notification whether
+      // the call was declined on web or on this mobile (and on call end).
+      _clearIncomingCallNotificationsForEvent(data);
+
+      if (otherUserId != null &&
+          _crossDeviceActiveCallRoomByUserId.containsKey(otherUserId)) {
         final trackedRoom = _crossDeviceActiveCallRoomByUserId[otherUserId];
         if (trackedRoom == null || trackedRoom == roomId || roomId.isEmpty) {
           setState(() {
@@ -3482,7 +3916,8 @@ class _LobbyScreenState extends State<LobbyScreen>
       }
     }
 
-    final room = data['call_room_id']?.toString() ?? data['room']?.toString() ?? '';
+    final room =
+        data['call_room_id']?.toString() ?? data['room']?.toString() ?? '';
     if (room.isNotEmpty) {
       for (final part in room.split('_')) {
         final parsed = int.tryParse(part);
@@ -3617,9 +4052,14 @@ class _LobbyScreenState extends State<LobbyScreen>
     final s = _compactScale(context);
     final avatarColor = _getAvatarColor(user.avatarColorIndex);
     final effectiveStatus = _getEffectiveStatus(user);
-    final hasCrossDeviceCall = _crossDeviceActiveCallRoomByUserId.containsKey(user.id);
+    final hasCrossDeviceCall = _crossDeviceActiveCallRoomByUserId.containsKey(
+      user.id,
+    );
     final isSelfChatTile = user.id == _socketService.currentUserId;
     final displayUnreadCount = isSelfChatTile ? 0 : user.unreadCount;
+    // Highlight the conversation currently open in the desktop detail pane so the
+    // two-pane layout makes clear which chat the right side is showing.
+    final isSelected = _isTwoPaneLayout && _selectedChatUser?.id == user.id;
 
     // Get last message preview
     String _getLastMessagePreview() {
@@ -3640,86 +4080,81 @@ class _LobbyScreenState extends State<LobbyScreen>
         vertical: _cs(context, 4),
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFF252542),
+        color: isSelected ? const Color(0xFF2E2E5C) : const Color(0xFF252542),
         borderRadius: BorderRadius.circular(_cs(context, 12)),
+        border: isSelected
+            ? Border.all(color: const Color(0xFF00D9FF), width: 1.5)
+            : null,
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(_cs(context, 12)),
           onTap: () {
-            // Track which chat is open to suppress unread badge increments
-            _currentlyViewingChatUserId = user.id;
-            // Navigate to chat screen
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ChatScreen(
-                  otherUser: user,
-                  initialCallInProgressOnOtherDevice:
-                      _crossDeviceActiveCallRoomByUserId.containsKey(user.id),
-                ),
-              ),
-            ).then((_) async {
-              // Clear the tracking
-              _currentlyViewingChatUserId = null;
-              // Immediately clear unread badge for this user in local state
-              // so it doesn't flash briefly while the server reload is in progress
-              setState(() {
-                final userIndex = _lobbyUsers.indexWhere((u) => u.id == user.id);
-                if (userIndex != -1) {
-                  final u = _lobbyUsers[userIndex];
-                  _lobbyUsers[userIndex] = LobbyUser(
-                    id: u.id,
-                    username: u.username,
-                    email: u.email,
-                    firstName: u.firstName,
-                    lastName: u.lastName,
-                    fullName: u.fullName,
-                    avatarUrl: u.avatarUrl,
-                    bio: u.bio,
-                    status: u.status,
-                    statusMessage: u.statusMessage,
-                    lastSeen: u.lastSeen,
-                    isOnline: u.isOnline,
-                    isAdmin: u.isAdmin,
-                    timezone: u.timezone,
-                    unreadCount: 0,
-                    isContact: u.isContact,
-                    isAdminUser: u.isAdminUser,
-                    lastMessage: u.lastMessage,
-                    lastMessageTime: u.lastMessageTime,
-                    lastMessageIsFromMe: u.lastMessageIsFromMe,
+            // Open the chat (detail pane on desktop, full-screen on mobile).
+            _openChat(
+              user,
+              onReturn: () async {
+                // Immediately clear unread badge for this user in local state
+                // so it doesn't flash briefly while the server reload is in progress
+                setState(() {
+                  final userIndex = _lobbyUsers.indexWhere(
+                    (u) => u.id == user.id,
                   );
-                }
-              });
+                  if (userIndex != -1) {
+                    final u = _lobbyUsers[userIndex];
+                    _lobbyUsers[userIndex] = LobbyUser(
+                      id: u.id,
+                      username: u.username,
+                      email: u.email,
+                      firstName: u.firstName,
+                      lastName: u.lastName,
+                      fullName: u.fullName,
+                      avatarUrl: u.avatarUrl,
+                      bio: u.bio,
+                      status: u.status,
+                      statusMessage: u.statusMessage,
+                      lastSeen: u.lastSeen,
+                      isOnline: u.isOnline,
+                      isAdmin: u.isAdmin,
+                      timezone: u.timezone,
+                      unreadCount: 0,
+                      isContact: u.isContact,
+                      isAdminUser: u.isAdminUser,
+                      lastMessage: u.lastMessage,
+                      lastMessageTime: u.lastMessageTime,
+                      lastMessageIsFromMe: u.lastMessageIsFromMe,
+                    );
+                  }
+                });
 
-              // Mark messages from this user as read via REST (fallback for any
-              // messages the socket handler may have missed while offline)
-              try {
-                final token = await StorageService.getToken();
-                if (token != null) {
-                  // Find the most recent message ID (use a large int as sentinel)
-                  await http.post(
-                    Uri.parse(ApiConfig.markReadUrl),
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': 'Bearer $token',
-                    },
-                    body: jsonEncode({
-                      'sender_id': user.id,
-                      'last_message_id':
-                          2147483647, // INT_MAX — marks ALL messages
-                    }),
-                  );
+                // Mark messages from this user as read via REST (fallback for any
+                // messages the socket handler may have missed while offline)
+                try {
+                  final token = await StorageService.getToken();
+                  if (token != null) {
+                    // Find the most recent message ID (use a large int as sentinel)
+                    await http.post(
+                      Uri.parse(ApiConfig.markReadUrl),
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer $token',
+                      },
+                      body: jsonEncode({
+                        'sender_id': user.id,
+                        'last_message_id':
+                            2147483647, // INT_MAX — marks ALL messages
+                      }),
+                    );
+                  }
+                } catch (e) {
+                  debugPrint('[LOBBY] mark-read REST fallback failed: $e');
                 }
-              } catch (e) {
-                debugPrint('[LOBBY] mark-read REST fallback failed: $e');
-              }
-              // Reload lobby and restore socket listeners when returning from chat
-              _loadLobby(useCacheFirst: false);
-              _setupRealtimeListeners();
-            });
+                // Reload lobby and restore socket listeners when returning from chat
+                _loadLobby(useCacheFirst: false);
+                _setupRealtimeListeners();
+              },
+            );
           },
           child: Padding(
             padding: EdgeInsets.all(_cs(context, 12)),
@@ -3811,18 +4246,18 @@ class _LobbyScreenState extends State<LobbyScreen>
                       // Online/Away/Offline status with relative time
                       Text(
                         hasCrossDeviceCall
-                          ? 'In call on another device'
-                          : effectiveStatus == 'online'
+                            ? 'In call on another device'
+                            : effectiveStatus == 'online'
                             ? 'Online'
                             : _formatRelativeTime(user.lastSeen),
                         style: TextStyle(
                           color: hasCrossDeviceCall
-                            ? const Color(0xFFF59E0B)
-                            : effectiveStatus == 'online'
+                              ? const Color(0xFFF59E0B)
+                              : effectiveStatus == 'online'
                               ? const Color(0xFF00E676)
                               : effectiveStatus == 'away'
-                                ? const Color(0xFFFFC107)
-                                : Colors.grey[500],
+                              ? const Color(0xFFFFC107)
+                              : Colors.grey[500],
                           fontSize: 13 * s,
                         ),
                       ),
@@ -3872,7 +4307,9 @@ class _LobbyScreenState extends State<LobbyScreen>
                           borderRadius: BorderRadius.circular(_cs(context, 12)),
                         ),
                         child: Text(
-                          displayUnreadCount > 99 ? '99+' : '$displayUnreadCount',
+                          displayUnreadCount > 99
+                              ? '99+'
+                              : '$displayUnreadCount',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 12 * s,
@@ -3914,9 +4351,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) => const AiChatScreen(),
-              ),
+              MaterialPageRoute(builder: (_) => const AiChatScreen()),
             ).then((_) {
               _loadAiSessionPresence();
               _loadLobby(useCacheFirst: false);
@@ -3988,7 +4423,10 @@ class _LobbyScreenState extends State<LobbyScreen>
                   children: [
                     Text(
                       timeLabel,
-                      style: TextStyle(color: Colors.grey[500], fontSize: 11 * s),
+                      style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 11 * s,
+                      ),
                     ),
                     SizedBox(height: _cs(context, 4)),
                     Text(
@@ -4031,10 +4469,7 @@ class _PulsingUpdateButton extends StatefulWidget {
   final String tooltip;
   final VoidCallback onPressed;
 
-  const _PulsingUpdateButton({
-    required this.tooltip,
-    required this.onPressed,
-  });
+  const _PulsingUpdateButton({required this.tooltip, required this.onPressed});
 
   @override
   State<_PulsingUpdateButton> createState() => _PulsingUpdateButtonState();
@@ -4052,9 +4487,10 @@ class _PulsingUpdateButtonState extends State<_PulsingUpdateButton>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
-    _opacity = Tween<double>(begin: 0.55, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _opacity = Tween<double>(
+      begin: 0.55,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override

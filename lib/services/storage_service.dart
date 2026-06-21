@@ -24,6 +24,56 @@ class StorageService {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
+  /// Whether to use the OS keychain (flutter_secure_storage). Only mobile.
+  ///
+  /// On desktop the keychain causes more problems than it solves for this app:
+  /// the data-protection keychain throws -34018 without a signed
+  /// keychain-access-groups entitlement, and the legacy keychain pops a
+  /// "login keychain password" prompt on every ad-hoc-signed rebuild (the code
+  /// signature changes each build so the keychain ACL never sticks). Since the
+  /// macOS build is unsigned/internal, we store these values in SharedPreferences
+  /// instead (prefixed). Less hardened than the keychain, acceptable here.
+  static bool get _useKeychain {
+    if (kIsWeb) return false;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// Prefix for keychain values that fall back to SharedPreferences on desktop,
+  /// keeping them in a separate namespace from the plain prefs keys.
+  static const String _securePrefsPrefix = 'secure_fallback_';
+
+  static Future<void> _secureWrite(String key, String value) async {
+    if (_useKeychain) {
+      await _secureStorage.write(key: key, value: value);
+      return;
+    }
+    final prefs = await _getPrefs();
+    await prefs.setString('$_securePrefsPrefix$key', value);
+  }
+
+  static Future<String?> _secureRead(String key) async {
+    if (_useKeychain) {
+      return _secureStorage.read(key: key);
+    }
+    final prefs = await _getPrefs();
+    return prefs.getString('$_securePrefsPrefix$key');
+  }
+
+  static Future<void> _secureDelete(String key) async {
+    if (_useKeychain) {
+      await _secureStorage.delete(key: key);
+      return;
+    }
+    final prefs = await _getPrefs();
+    await prefs.remove('$_securePrefsPrefix$key');
+  }
+
   /// Reset cached state — for use in unit tests only.
   @visibleForTesting
   static void resetForTesting() {
@@ -65,7 +115,7 @@ class StorageService {
       debugPrint('Error saving token to prefs: $e');
     }
     try {
-      await _secureStorage.write(key: _tokenKey, value: token);
+      await _secureWrite(_tokenKey, token);
     } catch (e) {
       debugPrint('Error saving token to secure storage: $e');
     }
@@ -78,9 +128,11 @@ class StorageService {
     // SharedPreferences fallback and incorrectly log the user out.
     String? secureToken;
     try {
-      secureToken = await _secureStorage.read(key: _tokenKey);
+      secureToken = await _secureRead(_tokenKey);
     } catch (e) {
-      debugPrint('Secure storage read failed, falling back to SharedPreferences: $e');
+      debugPrint(
+        'Secure storage read failed, falling back to SharedPreferences: $e',
+      );
     }
 
     if (secureToken != null && secureToken.isNotEmpty) {
@@ -101,7 +153,7 @@ class StorageService {
       final legacyToken = prefs.getString(_tokenKey);
       if (legacyToken != null && legacyToken.isNotEmpty) {
         try {
-          await _secureStorage.write(key: _tokenKey, value: legacyToken);
+          await _secureWrite(_tokenKey, legacyToken);
         } catch (e) {
           debugPrint('Could not re-write token to secure storage: $e');
         }
@@ -188,20 +240,16 @@ class StorageService {
       final prefs = await _getPrefs();
       final rememberMe = prefs.getBool(_rememberMeKey) ?? false;
       final storedUsername = prefs.getString(_rememberedUsernameKey);
-      final storedPassword = await _secureStorage.read(
-        key: _rememberedPasswordKey,
-      );
-      if (
-        rememberMe &&
-        storedUsername == username &&
-        storedPassword == password
-      ) {
+      final storedPassword = await _secureRead(_rememberedPasswordKey);
+      if (rememberMe &&
+          storedUsername == username &&
+          storedPassword == password) {
         return;
       }
 
       await prefs.setBool(_rememberMeKey, true);
       await prefs.setString(_rememberedUsernameKey, username);
-      await _secureStorage.write(key: _rememberedPasswordKey, value: password);
+      await _secureWrite(_rememberedPasswordKey, password);
     } catch (e) {
       debugPrint('Error saving remembered credentials: $e');
     }
@@ -220,7 +268,7 @@ class StorageService {
       if (!rememberMe) return null;
 
       final username = prefs.getString(_rememberedUsernameKey);
-      final password = await _secureStorage.read(key: _rememberedPasswordKey);
+      final password = await _secureRead(_rememberedPasswordKey);
 
       if (username == null || username.isEmpty) {
         return null;
@@ -248,7 +296,7 @@ class StorageService {
       final prefs = await _getPrefs();
       await prefs.remove(_rememberMeKey);
       await prefs.remove(_rememberedUsernameKey);
-      await _secureStorage.delete(key: _rememberedPasswordKey);
+      await _secureDelete(_rememberedPasswordKey);
     } catch (e) {
       debugPrint('Error clearing remembered credentials: $e');
     }
@@ -259,7 +307,7 @@ class StorageService {
     try {
       final prefs = await _getPrefs();
       final userId = prefs.getInt(_userIdKey);
-      await _secureStorage.delete(key: _tokenKey);
+      await _secureDelete(_tokenKey);
       await prefs.remove(_tokenKey);
       await prefs.remove(_userIdKey);
       await prefs.remove(_usernameKey);
@@ -324,7 +372,9 @@ class StorageService {
     final sessionKey = 'ai_session_id_$userId';
     final sessionValue = sessionId.toString();
 
-    debugPrint('[StorageService] Saving AI session ID: $sessionId for user: $userId');
+    debugPrint(
+      '[StorageService] Saving AI session ID: $sessionId for user: $userId',
+    );
 
     // Always write to SharedPreferences first so a secure-storage failure
     // (e.g. Android Keystore invalidation after an APK update) cannot prevent
@@ -333,22 +383,32 @@ class StorageService {
       final prefs = await _getPrefs();
       if (prefs.getInt(sessionKey) != sessionId) {
         await prefs.setInt(sessionKey, sessionId);
-        debugPrint('[StorageService] AI session ID saved to SharedPreferences: $sessionId');
+        debugPrint(
+          '[StorageService] AI session ID saved to SharedPreferences: $sessionId',
+        );
       } else {
-        debugPrint('[StorageService] AI session ID already saved in SharedPreferences: $sessionId');
+        debugPrint(
+          '[StorageService] AI session ID already saved in SharedPreferences: $sessionId',
+        );
       }
-      debugPrint('[StorageService] Post-save SharedPreferences value: ${prefs.getInt(sessionKey)}');
+      debugPrint(
+        '[StorageService] Post-save SharedPreferences value: ${prefs.getInt(sessionKey)}',
+      );
     } catch (e) {
       debugPrint('[StorageService] Error saving AI session ID to prefs: $e');
     }
 
     // Also store in secure storage for additional persistence
     try {
-      await _secureStorage.write(key: sessionKey, value: sessionValue);
-      final readBack = await _secureStorage.read(key: sessionKey);
-      debugPrint('[StorageService] AI session ID saved to secure storage: $sessionId, read back: $readBack');
+      await _secureWrite(sessionKey, sessionValue);
+      final readBack = await _secureRead(sessionKey);
+      debugPrint(
+        '[StorageService] AI session ID saved to secure storage: $sessionId, read back: $readBack',
+      );
     } catch (e) {
-      debugPrint('[StorageService] Error saving AI session ID to secure storage: $e');
+      debugPrint(
+        '[StorageService] Error saving AI session ID to secure storage: $e',
+      );
     }
   }
 
@@ -361,16 +421,20 @@ class StorageService {
     // Try secure storage first
     String? secureSessionId;
     try {
-      secureSessionId = await _secureStorage.read(key: sessionKey);
+      secureSessionId = await _secureRead(sessionKey);
       debugPrint('[StorageService] Secure storage result: $secureSessionId');
     } catch (e) {
-      debugPrint('[StorageService] Secure storage read failed for AI session, falling back to SharedPreferences: $e');
+      debugPrint(
+        '[StorageService] Secure storage read failed for AI session, falling back to SharedPreferences: $e',
+      );
     }
 
     if (secureSessionId != null && secureSessionId.isNotEmpty) {
       final sessionId = int.tryParse(secureSessionId);
       if (sessionId != null) {
-        debugPrint('[StorageService] Using AI session ID from secure storage: $sessionId');
+        debugPrint(
+          '[StorageService] Using AI session ID from secure storage: $sessionId',
+        );
         try {
           final prefs = await _getPrefs();
           // Keep SharedPreferences in sync
@@ -388,19 +452,27 @@ class StorageService {
       final legacySessionId = prefs.getInt(sessionKey);
       debugPrint('[StorageService] SharedPreferences result: $legacySessionId');
       if (legacySessionId != null) {
-        debugPrint('[StorageService] Using AI session ID from SharedPreferences: $legacySessionId');
+        debugPrint(
+          '[StorageService] Using AI session ID from SharedPreferences: $legacySessionId',
+        );
         // Migrate to secure storage
         try {
-          await _secureStorage.write(key: sessionKey, value: legacySessionId.toString());
+          await _secureWrite(sessionKey, legacySessionId.toString());
         } catch (e) {
-          debugPrint('[StorageService] Could not migrate AI session ID to secure storage: $e');
+          debugPrint(
+            '[StorageService] Could not migrate AI session ID to secure storage: $e',
+          );
         }
       } else {
-        debugPrint('[StorageService] No AI session ID found in SharedPreferences');
+        debugPrint(
+          '[StorageService] No AI session ID found in SharedPreferences',
+        );
       }
       return legacySessionId;
     } catch (e) {
-      debugPrint('[StorageService] Error getting AI session ID from SharedPreferences: $e');
+      debugPrint(
+        '[StorageService] Error getting AI session ID from SharedPreferences: $e',
+      );
       return null;
     }
   }
@@ -415,7 +487,7 @@ class StorageService {
       debugPrint('Error clearing AI session ID from prefs: $e');
     }
     try {
-      await _secureStorage.delete(key: sessionKey);
+      await _secureDelete(sessionKey);
     } catch (e) {
       debugPrint('Error clearing AI session ID from secure storage: $e');
     }
@@ -462,8 +534,5 @@ class RememberedCredentials {
   final String username;
   final String password;
 
-  const RememberedCredentials({
-    required this.username,
-    required this.password,
-  });
+  const RememberedCredentials({required this.username, required this.password});
 }

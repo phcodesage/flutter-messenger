@@ -78,10 +78,16 @@ class ChatScreen extends StatefulWidget {
   final LobbyUser otherUser;
   final bool initialCallInProgressOnOtherDevice;
 
+  /// When true the screen is rendered inside the desktop two-pane layout
+  /// (beside the conversation list) rather than as a pushed route. The back
+  /// button is hidden in this mode since there is nothing to pop.
+  final bool embedded;
+
   const ChatScreen({
     super.key,
     required this.otherUser,
     this.initialCallInProgressOnOtherDevice = false,
+    this.embedded = false,
   });
 
   @override
@@ -368,7 +374,8 @@ class _ChatScreenState extends State<ChatScreen>
   bool _isLoadingTasks = false;
 
   // Message IDs loaded from local cache/server history.
-  // For these historical records, UI should always display status as "sent".
+  // For these historical records, UI should always display status as "seen"
+  // (they predate the current session and have already been read).
   final Set<int> _databaseLoadedMessageIds = {};
 
   // Animated task count badge
@@ -3633,6 +3640,7 @@ class _ChatScreenState extends State<ChatScreen>
     const settings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
+      macOS: iosSettings,
     );
 
     await _localNotificationsPlugin.initialize(
@@ -5041,7 +5049,153 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
+  void _toggleStamp() {
+    setState(() {
+      _stampEnabled = !_stampEnabled;
+    });
+    unawaited(_saveStampPreference());
+
+    if (_stampEnabled) {
+      _seedStampPrefixInInput();
+    } else if (_hasStampPrefix(_messageController.text)) {
+      final withoutStamp = _removeStampTagFromText(_messageController.text);
+      _replaceInputTextWithSanitized(withoutStamp);
+    }
+  }
+
+  /// A full-size, web-style action pill used in the desktop composer (single
+  /// line label, natural width). Mobile uses the compact two-row layout instead.
+  Widget _buildDesktopActionPill({
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return Material(
+      color: color,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onPressed();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Desktop composer actions laid out as web-style colored pill rows that wrap,
+  /// rather than the compact fitted two-row layout used on mobile.
+  Widget _buildDesktopActionsBar() {
+    // Ordered to mirror the web composer's pill rows. Send File is a normal
+    // pill here (the upload progress still shows in the message area), not the
+    // full-width mobile chip.
+    final pills = <Widget>[
+      _buildDesktopActionPill(
+        label: widget.otherUser.firstName,
+        color: const Color(0xFF0F766E),
+        onPressed: _insertOtherUserFirstName,
+      ),
+      _buildDesktopActionPill(
+        label: 'Paste',
+        color: const Color(0xFF1D4ED8),
+        onPressed: _pasteFromClipboard,
+      ),
+      _buildDesktopActionPill(
+        label: 'Ring Doorbell',
+        color: const Color(0xFF7C3AED),
+        onPressed: _ringDoorbell,
+      ),
+      _buildDesktopActionPill(
+        label: _stampEnabled ? 'Stamp On' : 'Stamp Off',
+        color: const Color(0xFF0C95D4),
+        onPressed: _toggleStamp,
+      ),
+      _buildDesktopActionPill(
+        label: 'Change Color',
+        color: const Color(0xFF9333EA),
+        onPressed: _changeColor,
+      ),
+      if (_showResetButton)
+        _buildDesktopActionPill(
+          label: 'Reset Color',
+          color: const Color(0xFF6B7280),
+          onPressed: _resetColor,
+        ),
+      _buildDesktopActionPill(
+        label: 'Send File',
+        color: const Color(0xFF16A34A),
+        onPressed: _showAttachmentMenu,
+      ),
+      _buildDesktopActionPill(
+        label: 'Voice Message',
+        color: const Color(0xFFEF4444),
+        onPressed: _showVoiceRecordingModal,
+      ),
+      _buildDesktopActionPill(
+        label: 'Auto Correction',
+        color: const Color(0xFFF59E0B),
+        onPressed: _showAutoCorrectionDictionaryModal,
+      ),
+      _buildDesktopActionPill(
+        label: _autoTranslate ? 'Translate On' : 'Translate Off',
+        color: const Color(0xFFC026D3),
+        onPressed: _toggleAutoTranslate,
+      ),
+      _buildDesktopActionPill(
+        label: _showTimestamps ? 'Hide Timestamps' : 'Show Timestamps',
+        color: const Color(0xFF4F46E5),
+        onPressed: _toggleTimestamps,
+      ),
+      _buildDesktopActionPill(
+        label: 'Common Phrases',
+        color: const Color(0xFFEC4899),
+        onPressed: _showCommonPhrasesModal,
+      ),
+      _buildDesktopActionPill(
+        label: 'Video Call',
+        color: const Color(0xFF0D9488),
+        onPressed: () => _showCallSetupModal(CallType.video),
+      ),
+      _buildDesktopActionPill(
+        label: 'Audio Call',
+        color: const Color(0xFFD97706),
+        onPressed: () => _showCallSetupModal(CallType.audio),
+      ),
+      _buildDesktopActionPill(
+        label: 'Export Chat',
+        color: const Color(0xFF6B7280),
+        onPressed: _exportChat,
+      ),
+      if (_currentUserIsAdmin)
+        _buildDesktopActionPill(
+          label: 'Delete Messages',
+          color: const Color(0xFF6D28D9),
+          onPressed: _adminDeleteAllMessages,
+        ),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Wrap(spacing: 8, runSpacing: 8, children: pills),
+    );
+  }
+
   Widget _buildUnifiedActionsBar() {
+    // Desktop: web-style pill rows. Mobile keeps the compact two-row layout.
+    if (widget.embedded) {
+      return _buildDesktopActionsBar();
+    }
     final allButtons = <Widget>[
       // Row 1: Send File, Voice Message, Auto Correction, Translate Off, Stamp Off
       _buildSendFileChip(),
@@ -5057,33 +5211,22 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       _buildCompressedActionChip(
         label: _autoTranslate ? 'Translate On' : 'Translate Off',
-        backgroundColor: const Color(0xFFC026D3), // web Auto-Translate (darkened for white text)
+        backgroundColor: const Color(
+          0xFFC026D3,
+        ), // web Auto-Translate (darkened for white text)
         onPressed: _toggleAutoTranslate,
       ),
       _buildCompressedActionChip(
         label: _stampEnabled ? 'Stamp On' : 'Stamp Off',
         backgroundColor: const Color(0xFF0C95D4), // web Stamp Name
-
-        onPressed: () {
-          setState(() {
-            _stampEnabled = !_stampEnabled;
-          });
-          unawaited(_saveStampPreference());
-
-          if (_stampEnabled) {
-            _seedStampPrefixInInput();
-          } else if (_hasStampPrefix(_messageController.text)) {
-            final withoutStamp = _removeStampTagFromText(
-              _messageController.text,
-            );
-            _replaceInputTextWithSanitized(withoutStamp);
-          }
-        },
+        onPressed: _toggleStamp,
       ),
       // Row 2 extras (after username + paste): Change Color, [Reset Color], Export Chat, Show Timestamps, [Delete Messages]
       _buildCompressedActionChip(
         label: 'Change Color',
-        backgroundColor: const Color(0xFF9333EA), // Change Color (darkened for white text)
+        backgroundColor: const Color(
+          0xFF9333EA,
+        ), // Change Color (darkened for white text)
         onPressed: _changeColor,
       ),
       if (_showResetButton)
@@ -5099,7 +5242,9 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       _buildCompressedActionChip(
         label: _showTimestamps ? 'Hide\nTimestamps' : 'Show\nTimestamps',
-        backgroundColor: const Color(0xFF4F46E5), // web Show Timestamps (darkened for white text)
+        backgroundColor: const Color(
+          0xFF4F46E5,
+        ), // web Show Timestamps (darkened for white text)
 
         onPressed: _toggleTimestamps,
       ),
@@ -5141,12 +5286,19 @@ class _ChatScreenState extends State<ChatScreen>
     // Add exactly one separating space on each side, but never a double: skip
     // the space if one already exists there. (e.g. caret between "this" and
     // "is" → "this Amol is", reusing the existing space, adding one after.)
-    final spaceBefore =
-        (before.isEmpty || RegExp(r'\s$').hasMatch(before)) ? '' : ' ';
-    // No trailing space when inserting at the very end; otherwise add one
-    // unless the following text already starts with whitespace.
-    final spaceAfter =
-        (after.isEmpty || RegExp(r'^\s').hasMatch(after)) ? '' : ' ';
+    final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
+        ? ''
+        : ' ';
+    // Inserting into an empty input adds a single trailing space so the next
+    // word is separated and the caret lands ready to type. Otherwise: no
+    // trailing space at the very end, and don't double up when the following
+    // text already starts with whitespace.
+    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
+    final spaceAfter = inputIsEmpty
+        ? ' '
+        : (after.isEmpty || RegExp(r'^\s').hasMatch(after))
+        ? ''
+        : ' ';
 
     final inserted = '$spaceBefore$firstName$spaceAfter';
     final newText = '$before$inserted$after';
@@ -5215,7 +5367,9 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       _buildCompressedActionChip(
         label: 'Common\nPhrases',
-        backgroundColor: const Color(0xFFEC4899), // web Common Phrases (pink-500)
+        backgroundColor: const Color(
+          0xFFEC4899,
+        ), // web Common Phrases (pink-500)
         onPressed: _showCommonPhrasesModal,
       ),
       ...allButtons.skip(itemsPerRow),
@@ -6257,7 +6411,9 @@ class _ChatScreenState extends State<ChatScreen>
                       ? const Color(0xFF7C3AED)
                       : isUploading
                       ? const Color(0xFF7C3AED)
-                      : const Color(0xFF16A34A), // web Send File (darkened green-600 for white text)
+                      : const Color(
+                          0xFF16A34A,
+                        ), // web Send File (darkened green-600 for white text)
                   onPressed: _isActivelyUploading || _pendingFile != null
                       ? _reopenFileUploadModal
                       : _pendingMediaItems != null &&
@@ -7154,7 +7310,9 @@ class _ChatScreenState extends State<ChatScreen>
     final actionButtons = <Widget>[
       _buildActionSheetButton(
         label: 'Change Color',
-        backgroundColor: const Color(0xFF9333EA), // Change Color (darkened for white text)
+        backgroundColor: const Color(
+          0xFF9333EA,
+        ), // Change Color (darkened for white text)
         onPressed: () => _runActionSheetAction(() {
           _changeColor();
         }),
@@ -7172,7 +7330,9 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       _buildActionSheetButton(
         label: 'Send File',
-        backgroundColor: const Color(0xFF16A34A), // web Send File (darkened green-600 for white text)
+        backgroundColor: const Color(
+          0xFF16A34A,
+        ), // web Send File (darkened green-600 for white text)
         onPressed: () => _runActionSheetAction(_pickFile),
       ),
       if (Platform.isAndroid)
@@ -7195,12 +7355,16 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       _buildActionSheetButton(
         label: _autoTranslate ? 'Translate On' : 'Translate Off',
-        backgroundColor: const Color(0xFFC026D3), // web Auto-Translate (darkened for white text)
+        backgroundColor: const Color(
+          0xFFC026D3,
+        ), // web Auto-Translate (darkened for white text)
         onPressed: () => _runActionSheetAction(_toggleAutoTranslate),
       ),
       _buildActionSheetButton(
         label: _showTimestamps ? 'Hide Timestamps' : 'Show Timestamps',
-        backgroundColor: const Color(0xFF4F46E5), // web Show Timestamps (darkened for white text)
+        backgroundColor: const Color(
+          0xFF4F46E5,
+        ), // web Show Timestamps (darkened for white text)
 
         onPressed: () {
           _toggleTimestamps();
@@ -11059,7 +11223,7 @@ class _ChatScreenState extends State<ChatScreen>
         taskCount: _taskMessages.where((m) => m.isTask).length,
         excalidrawCount: _pinnedExcalidrawLinks.length,
         scale: scale,
-        onBack: () => Navigator.pop(context),
+        onBack: widget.embedded ? null : () => Navigator.pop(context),
         onUserProfile: _showUserProfile,
         onShowTasks: _showTasksModal,
         onShowExcalidraw: _showExcalidrawModal,
@@ -11336,6 +11500,7 @@ class _ChatScreenState extends State<ChatScreen>
                       replyPreview: _buildReplyPreview(),
                       sendToManyQuickAction: _buildSendToManyQuickAction(),
                       unifiedActionsBar: _buildUnifiedActionsBar(),
+                      actionsBelowInput: widget.embedded,
                       inlineEmojiPickerBuilder: (panelHeight) =>
                           _buildInlineEmojiPicker(panelHeight),
                     ),
@@ -14324,12 +14489,27 @@ class _ChatScreenState extends State<ChatScreen>
       final gmt = 'GMT$sign$offH${offM != 0 ? ':${two(offM)}' : ''}';
 
       const weekdays = [
-        'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-        'Friday', 'Saturday', 'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
       ];
       const months = [
-        'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December',
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
       ];
       final longStr =
           '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}, ${dt.year}';
@@ -15048,7 +15228,7 @@ class _ChatScreenState extends State<ChatScreen>
       return 'seen';
     }
     if (_databaseLoadedMessageIds.contains(message.id)) {
-      return 'sent';
+      return 'seen';
     }
     return message.status;
   }
@@ -15884,8 +16064,10 @@ class _FilePreviewModalContentState extends State<_FilePreviewModalContent> {
           Navigator.of(context).pop();
         }
       });
-    } else if (_isSending && !_didAutoDismiss &&
-        _lastProgress > 0.05 && progress == 0.0) {
+    } else if (_isSending &&
+        !_didAutoDismiss &&
+        _lastProgress > 0.05 &&
+        progress == 0.0) {
       _didAutoDismiss = true;
       if (mounted) {
         Navigator.of(context).pop();

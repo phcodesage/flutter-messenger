@@ -15,7 +15,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     required this.taskCount,
     required this.excalidrawCount,
     required this.scale,
-    required this.onBack,
+    this.onBack,
     required this.onUserProfile,
     required this.onShowTasks,
     required this.onShowExcalidraw,
@@ -34,7 +34,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   final int taskCount;
   final int excalidrawCount;
   final double scale;
-  final VoidCallback onBack;
+  final VoidCallback? onBack;
   final VoidCallback onUserProfile;
   final VoidCallback onShowTasks;
   final VoidCallback onShowExcalidraw;
@@ -64,11 +64,16 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     return AppBar(
       backgroundColor: headerColor,
       elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: onBack,
-      ),
-      titleSpacing: 0,
+      automaticallyImplyLeading: false,
+      // In the desktop two-pane layout the chat lives beside the conversation
+      // list, so there is nothing to pop back to — hide the back button.
+      leading: onBack == null
+          ? null
+          : IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: onBack,
+            ),
+      titleSpacing: onBack == null ? 12 : 0,
       title: GestureDetector(
         onTap: onUserProfile,
         child: Row(
@@ -159,7 +164,9 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
           context,
           icon: Icons.draw_outlined,
           count: excalidrawCount,
-          color: const Color(0xFFF97316), // orange — matches web Excalidraw button
+          color: const Color(
+            0xFFF97316,
+          ), // orange — matches web Excalidraw button
           onPressed: onShowExcalidraw,
           tooltip: 'Excalidraw',
           scale: scale,
@@ -221,10 +228,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                     ? const Color(0xFFF59E0B)
                     : _statusDotColor(partnerStatus),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: headerColor,
-                  width: 2,
-                ),
+                border: Border.all(color: headerColor, width: 2),
               ),
             ),
           ),
@@ -259,9 +263,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
         break;
       case 'away':
         color = const Color(0xFFFFC107);
-        label = partnerLastSeen != null
-            ? 'Away · $partnerLastSeen'
-            : 'Away';
+        label = partnerLastSeen != null ? 'Away · $partnerLastSeen' : 'Away';
         break;
       default:
         color = Colors.grey.shade400;

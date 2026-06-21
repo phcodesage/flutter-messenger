@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -53,7 +54,7 @@ class ChatMessageBubble extends StatefulWidget {
   final VoidCallback? onDoubleTap;
   final VoidCallback onLongPress;
   final void Function(BuildContext context, int messageId, Offset position)
-      onShowReactionPicker;
+  onShowReactionPicker;
   final void Function(Message message) onOpenMediaViewer;
   final void Function(Message message) onDownloadIncomingFile;
   final void Function(String url) onOpenMessageUrl;
@@ -66,7 +67,8 @@ class ChatMessageBubble extends StatefulWidget {
     required String text,
     required bool isTaskMessage,
     required Color taskAccentColor,
-  }) buildLinkifiedMessageText;
+  })
+  buildLinkifiedMessageText;
   final Widget Function(String status, double scale) buildStatusIndicator;
 
   @override
@@ -92,7 +94,9 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   }
 
   Future<void> _fetchPreview() async {
-    final preview = await LinkPreviewService().getPreview(widget.message.content);
+    final preview = await LinkPreviewService().getPreview(
+      widget.message.content,
+    );
     if (mounted) {
       setState(() {
         _linkPreview = preview;
@@ -115,40 +119,50 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
 
   @override
   Widget build(BuildContext context) {
-    final maxBubbleWidth = MediaQuery.of(context).size.width *
-      (widget.scale < 0.9 ? 0.82 : 0.70);
-    final int imageCacheWidth = ((maxBubbleWidth *
-          MediaQuery.of(context).devicePixelRatio)
-        .round()
-        .clamp(320, 2048))
-      as int;
-    final bool isImage = widget.message.messageType == 'image' ||
+    // Cap the bubble width so messages stay readable in the wide desktop
+    // two-pane layout (where MediaQuery reports the full window width) instead
+    // of stretching across the whole chat pane. Mobile widths fall well under
+    // the cap, so phone layout is unchanged.
+    final maxBubbleWidth = math.min(
+      MediaQuery.of(context).size.width * (widget.scale < 0.9 ? 0.82 : 0.70),
+      560.0,
+    );
+    final int imageCacheWidth =
+        ((maxBubbleWidth * MediaQuery.of(context).devicePixelRatio)
+                .round()
+                .clamp(320, 2048))
+            as int;
+    final bool isImage =
+        widget.message.messageType == 'image' ||
         (widget.message.fileType?.startsWith('image/') ?? false);
-    final bool isVideo = widget.message.messageType == 'video' ||
+    final bool isVideo =
+        widget.message.messageType == 'video' ||
         (widget.message.fileType?.startsWith('video/') ?? false);
-    final bool isAudio = widget.message.messageType == 'voice' ||
+    final bool isAudio =
+        widget.message.messageType == 'voice' ||
         widget.message.messageType == 'audio' ||
         (widget.message.fileType?.startsWith('audio/') ?? false);
     final bool isMedia = isImage || isVideo;
     final bool isContact = widget.message.messageType == 'contact';
     final bool isGenericFile =
         (!isMedia && !isAudio && !isContact) &&
-            ((widget.message.messageType == 'file' ||
+        ((widget.message.messageType == 'file' ||
                 widget.message.messageType == 'document') ||
-              (widget.message.fileUrl != null && widget.message.fileUrl!.isNotEmpty));
+            (widget.message.fileUrl != null &&
+                widget.message.fileUrl!.isNotEmpty));
     final bool canSaveAttachment =
-          widget.message.fileUrl != null &&
-          widget.message.fileUrl!.isNotEmpty &&
-      (isMedia || isAudio || isGenericFile);
+        widget.message.fileUrl != null &&
+        widget.message.fileUrl!.isNotEmpty &&
+        (isMedia || isAudio || isGenericFile);
 
     final hasReactions =
-          widget.messageReactions[widget.message.id] != null &&
-            widget.messageReactions[widget.message.id]!.isNotEmpty;
-        final isTaskMessage = widget.message.isTask;
-        final bool isTaskCompleted = widget.message.taskCompletedAt != null;
+        widget.messageReactions[widget.message.id] != null &&
+        widget.messageReactions[widget.message.id]!.isNotEmpty;
+    final isTaskMessage = widget.message.isTask;
+    final bool isTaskCompleted = widget.message.taskCompletedAt != null;
     final bool isPinnedExcalidraw =
-          widget.canQuickToggleExcalidrawPin(widget.message) &&
-            widget.message.excalidrawPinnedAt != null;
+        widget.canQuickToggleExcalidrawPin(widget.message) &&
+        widget.message.excalidrawPinnedAt != null;
     const excalidrawAccentColor = Color(0xFFB794F6);
     final taskAccentColor = isTaskCompleted
         ? const Color(0xFF22C55E)
@@ -165,21 +179,21 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
       onLongPress: widget.onLongPress,
       child: Container(
         margin: EdgeInsets.only(bottom: hasReactions ? 2 : 12),
-        constraints: BoxConstraints(
-          maxWidth: maxBubbleWidth,
-        ),
+        constraints: BoxConstraints(maxWidth: maxBubbleWidth),
         decoration: BoxDecoration(
-          color: widget.isSentByMe ? const Color(0xFF420796) : const Color(0xFF3944BC),
+          color: widget.isSentByMe
+              ? const Color(0xFF420796)
+              : const Color(0xFF3944BC),
           border: bubbleAccentColor != null
               ? Border.all(
-                  color: bubbleAccentColor.withValues(alpha:  0.85),
+                  color: bubbleAccentColor.withValues(alpha: 0.85),
                   width: 1.4,
                 )
               : null,
           boxShadow: bubbleAccentColor != null
               ? [
                   BoxShadow(
-                    color: bubbleAccentColor.withValues(alpha:  0.45),
+                    color: bubbleAccentColor.withValues(alpha: 0.45),
                     blurRadius: 14,
                     spreadRadius: 0.2,
                   ),
@@ -197,10 +211,18 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           children: [
             if (isPinnedExcalidraw)
               _buildPinnedExcalidrawLabel(widget.scale, excalidrawAccentColor),
-            if (widget.message.replyToId != null || widget.message.replyPreview != null)
+            if (widget.message.replyToId != null ||
+                widget.message.replyPreview != null)
               _buildReplyPreview(widget.message, widget.scale),
-            if (isMedia && (widget.message.fileUrl != null || widget.message.localFilePath != null))
-              _buildMediaContent(isImage, isVideo, widget.message, imageCacheWidth),
+            if (isMedia &&
+                (widget.message.fileUrl != null ||
+                    widget.message.localFilePath != null))
+              _buildMediaContent(
+                isImage,
+                isVideo,
+                widget.message,
+                imageCacheWidth,
+              ),
             // _buildMediaFileInfo removed to prevent duplicate/redundant file info bar below media
             if (isAudio && widget.message.fileUrl != null)
               AudioMessagePlayer(
@@ -213,7 +235,11 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                 isSentByMe: widget.isSentByMe,
               ),
             if (isGenericFile)
-              _buildGenericFileContent(widget.message, taskAccentColor, widget.scale),
+              _buildGenericFileContent(
+                widget.message,
+                taskAccentColor,
+                widget.scale,
+              ),
             if (!isContact &&
                 ((!isMedia && !isAudio && !isGenericFile) ||
                     (widget.message.content.isNotEmpty &&
@@ -269,13 +295,16 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
       duration: const Duration(milliseconds: 150),
       curve: Curves.easeOut,
       color: widget.isSelected
-          ? Colors.white.withValues(alpha:  0.07)
+          ? Colors.white.withValues(alpha: 0.07)
           : Colors.transparent,
       child: Align(
-        alignment: widget.isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: widget.isSentByMe
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
         child: Column(
-          crossAxisAlignment:
-              widget.isSentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: widget.isSentByMe
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Builder(
@@ -284,21 +313,33 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    bubbleWidget,
+                    // Flexible so a max-width bubble can shrink to leave room
+                    // for the reaction icon instead of overflowing (notably in
+                    // the wider desktop chat pane).
+                    Flexible(child: bubbleWidget),
                     if (!widget.isSentByMe)
                       GestureDetector(
                         onTap: () {
-                          final renderBox = rowContext.findRenderObject() as RenderBox?;
+                          final renderBox =
+                              rowContext.findRenderObject() as RenderBox?;
                           if (renderBox != null) {
-                            final position = renderBox.localToGlobal(Offset.zero);
-                            widget.onShowReactionPicker(context, widget.message.id, position);
+                            final position = renderBox.localToGlobal(
+                              Offset.zero,
+                            );
+                            widget.onShowReactionPicker(
+                              context,
+                              widget.message.id,
+                              position,
+                            );
                           }
                         },
                         child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 4 * widget.scale),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 4 * widget.scale,
+                          ),
                           child: Icon(
                             Icons.sentiment_satisfied_alt_outlined,
-                            color: Colors.white.withValues(alpha:  0.6),
+                            color: Colors.white.withValues(alpha: 0.6),
                             size: 22 * widget.scale,
                           ),
                         ),
@@ -323,7 +364,10 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     );
   }
 
-  Widget _buildPinnedExcalidrawLabel(double scale, Color excalidrawAccentColor) {
+  Widget _buildPinnedExcalidrawLabel(
+    double scale,
+    Color excalidrawAccentColor,
+  ) {
     return Padding(
       padding: EdgeInsets.fromLTRB(12 * scale, 8 * scale, 12 * scale, 2),
       child: Container(
@@ -332,10 +376,10 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           vertical: 3 * scale,
         ),
         decoration: BoxDecoration(
-          color: excalidrawAccentColor.withValues(alpha:  0.18),
+          color: excalidrawAccentColor.withValues(alpha: 0.18),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: excalidrawAccentColor.withValues(alpha:  0.55),
+            color: excalidrawAccentColor.withValues(alpha: 0.55),
           ),
         ),
         child: Text(
@@ -353,8 +397,12 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   Widget _buildReplyPreview(Message message, double scale) {
     final preview = message.replyPreview ?? '';
     final colonIndex = preview.indexOf(':');
-    final senderName = colonIndex > 0 ? preview.substring(0, colonIndex) : 'Reply';
-    var contentText = colonIndex > 0 ? preview.substring(colonIndex + 1).trim() : preview;
+    final senderName = colonIndex > 0
+        ? preview.substring(0, colonIndex)
+        : 'Reply';
+    var contentText = colonIndex > 0
+        ? preview.substring(colonIndex + 1).trim()
+        : preview;
 
     // Safety net only for legacy/raw HTML that wasn't already cleaned upstream
     // (the model parser + backend normally provide a clean label or filename).
@@ -386,7 +434,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           vertical: 6 * scale,
         ),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha:  0.15),
+          color: Colors.black.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(6),
           border: const Border(
             left: BorderSide(color: Color(0xFFB794F6), width: 3),
@@ -399,7 +447,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             Text(
               senderName,
               style: TextStyle(
-                color: Colors.white.withValues(alpha:  0.9),
+                color: Colors.white.withValues(alpha: 0.9),
                 fontSize: 11 * scale,
                 fontWeight: FontWeight.w600,
               ),
@@ -408,7 +456,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             Text(
               contentText,
               style: TextStyle(
-                color: Colors.white.withValues(alpha:  0.7),
+                color: Colors.white.withValues(alpha: 0.7),
                 fontSize: 12 * scale,
               ),
               maxLines: 1,
@@ -420,26 +468,26 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     );
   }
 
-  Widget _buildMediaContent(bool isImage, bool isVideo, Message message, int imageCacheWidth) {
-    final hasText = (message.content.isNotEmpty && !widget.isOnlyFilename(message.content)) ||
+  Widget _buildMediaContent(
+    bool isImage,
+    bool isVideo,
+    Message message,
+    int imageCacheWidth,
+  ) {
+    final hasText =
+        (message.content.isNotEmpty &&
+            !widget.isOnlyFilename(message.content)) ||
         (message.caption != null && message.caption!.isNotEmpty);
-        
+
     final borderRadius = BorderRadius.only(
       topLeft: const Radius.circular(16),
       topRight: const Radius.circular(16),
-      bottomLeft: Radius.circular(
-        hasText
-            ? 0
-            : (widget.isSentByMe ? 16 : 4),
-      ),
-      bottomRight: Radius.circular(
-        hasText
-            ? 0
-            : (widget.isSentByMe ? 4 : 16),
-      ),
+      bottomLeft: Radius.circular(hasText ? 0 : (widget.isSentByMe ? 16 : 4)),
+      bottomRight: Radius.circular(hasText ? 0 : (widget.isSentByMe ? 4 : 16)),
     );
 
-    final showLocal = message.localFilePath != null &&
+    final showLocal =
+        message.localFilePath != null &&
         message.localFilePath!.isNotEmpty &&
         File(message.localFilePath!).existsSync();
 
@@ -449,8 +497,10 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     // replaced by an aspect-ratio-sized image. A stable box + BoxFit.cover
     // means zero relayout on load. The full, uncropped media is shown in the
     // media viewer on tap.
-    final mediaWidth = MediaQuery.of(context).size.width *
-        (widget.scale < 0.9 ? 0.82 : 0.70);
+    final mediaWidth = math.min(
+      MediaQuery.of(context).size.width * (widget.scale < 0.9 ? 0.82 : 0.70),
+      560.0,
+    );
     final mediaHeight = (mediaWidth * 0.75).clamp(180.0, 300.0);
 
     return RepaintBoundary(
@@ -544,12 +594,15 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   Widget _buildMediaFileInfo(Message message, double scale) {
     final fileName = message.fileName ?? '';
     final fileSize = message.fileSize;
-    
+
     // Don't show if no useful info available
     if (fileName.isEmpty && fileSize == null) return const SizedBox.shrink();
 
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 12 * scale, vertical: 6 * scale),
+      padding: EdgeInsets.symmetric(
+        horizontal: 12 * scale,
+        vertical: 6 * scale,
+      ),
       child: Row(
         children: [
           Icon(
@@ -577,10 +630,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             SizedBox(width: 8 * scale),
             Text(
               _formatMediaFileSize(fileSize),
-              style: TextStyle(
-                color: Colors.white38,
-                fontSize: 11 * scale,
-              ),
+              style: TextStyle(color: Colors.white38, fontSize: 11 * scale),
             ),
           ],
         ],
@@ -592,7 +642,8 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   String _formatMediaFileSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024 * 1024)
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
@@ -604,18 +655,18 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     final String fileName = (message.fileName?.isNotEmpty ?? false)
         ? message.fileName!
         : (message.fileUrl != null
-            ? (Uri.tryParse(message.fileUrl!)
-                    ?.pathSegments
-                    .last
-                    .replaceAll('%20', ' ') ??
-                'File')
-            : 'File');
+              ? (Uri.tryParse(
+                      message.fileUrl!,
+                    )?.pathSegments.last.replaceAll('%20', ' ') ??
+                    'File')
+              : 'File');
     final String ext = FileTypeIcon.extensionOf(fileName);
     final String sizeStr = (message.fileSize != null && message.fileSize! > 0)
         ? widget.formatFileSize(message.fileSize!)
         : (message.fileUrl != null ? 'Unknown size' : 'File not available');
-    final String subtitle =
-        ext.isNotEmpty ? '${ext.toUpperCase()} · $sizeStr' : sizeStr;
+    final String subtitle = ext.isNotEmpty
+        ? '${ext.toUpperCase()} · $sizeStr'
+        : sizeStr;
 
     return Container(
       padding: EdgeInsets.all(14 * scale),
@@ -680,7 +731,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             const SizedBox(height: 8),
             Container(
               height: 1,
-              color: Colors.white.withValues(alpha:  0.3),
+              color: Colors.white.withValues(alpha: 0.3),
               margin: const EdgeInsets.symmetric(vertical: 4),
             ),
             Row(
@@ -689,13 +740,13 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                 Icon(
                   Icons.language,
                   size: 14,
-                  color: Colors.white.withValues(alpha:  0.7),
+                  color: Colors.white.withValues(alpha: 0.7),
                 ),
                 const SizedBox(width: 4),
                 Text(
                   'auto → en',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha:  0.7),
+                    color: Colors.white.withValues(alpha: 0.7),
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
                   ),
@@ -706,7 +757,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             Text(
               widget.messageTranslations[message.id]!,
               style: TextStyle(
-                color: Colors.white.withValues(alpha:  0.9),
+                color: Colors.white.withValues(alpha: 0.9),
                 fontSize: 14,
                 fontStyle: FontStyle.italic,
               ),
@@ -736,7 +787,11 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     return _buildInlineOgPreview(preview, scale);
   }
 
-  Widget _buildInlineYouTubePreview(String videoId, String? title, double scale) {
+  Widget _buildInlineYouTubePreview(
+    String videoId,
+    String? title,
+    double scale,
+  ) {
     final thumbUrl = 'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
     final fallbackUrl = 'https://img.youtube.com/vi/$videoId/mqdefault.jpg';
     final watchUrl = 'https://www.youtube.com/watch?v=$videoId';
@@ -746,7 +801,8 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         try {
           final uri = Uri.parse(watchUrl);
           // ignore: deprecated_member_use
-          if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
+          if (await canLaunchUrl(uri))
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
         } catch (_) {}
       },
       child: Column(
@@ -767,7 +823,8 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                     errorBuilder: (_, __, ___) => Image.network(
                       fallbackUrl,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(color: Colors.grey[850]),
+                      errorBuilder: (_, __, ___) =>
+                          Container(color: Colors.grey[850]),
                     ),
                   ),
                   Center(
@@ -778,7 +835,11 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                         color: Colors.black.withValues(alpha: 0.6),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.play_arrow, color: Colors.white, size: 30 * scale),
+                      child: Icon(
+                        Icons.play_arrow,
+                        color: Colors.white,
+                        size: 30 * scale,
+                      ),
                     ),
                   ),
                 ],
@@ -787,7 +848,12 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           ),
           // YouTube branding + title
           Padding(
-            padding: EdgeInsets.fromLTRB(12 * scale, 6 * scale, 12 * scale, 4 * scale),
+            padding: EdgeInsets.fromLTRB(
+              12 * scale,
+              6 * scale,
+              12 * scale,
+              4 * scale,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -795,7 +861,11 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.play_circle_fill, color: const Color(0xFFFF0000), size: 12 * scale),
+                    Icon(
+                      Icons.play_circle_fill,
+                      color: const Color(0xFFFF0000),
+                      size: 12 * scale,
+                    ),
                     SizedBox(width: 4 * scale),
                     Text(
                       'YouTube',
@@ -840,7 +910,8 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         try {
           final uri = Uri.parse(preview.url);
           // ignore: deprecated_member_use
-          if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
+          if (await canLaunchUrl(uri))
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
         } catch (_) {}
       },
       child: Column(
@@ -862,7 +933,12 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             ),
           // Domain + title + description
           Padding(
-            padding: EdgeInsets.fromLTRB(12 * scale, 6 * scale, 12 * scale, 4 * scale),
+            padding: EdgeInsets.fromLTRB(
+              12 * scale,
+              6 * scale,
+              12 * scale,
+              4 * scale,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -906,7 +982,8 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                     ),
                   ),
                 ],
-                if (preview.description != null && preview.description!.isNotEmpty) ...[
+                if (preview.description != null &&
+                    preview.description!.isNotEmpty) ...[
                   SizedBox(height: 2 * scale),
                   Text(
                     preview.description!,
@@ -944,10 +1021,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           children: [
             Text(
               message.formattedTime,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 11 * scale,
-              ),
+              style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
             ),
             SizedBox(width: 4 * scale),
             widget.buildStatusIndicator(widget.statusForUi(message), scale),
@@ -966,10 +1040,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         children: [
           Text(
             message.formattedTime,
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 11 * scale,
-            ),
+            style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
           ),
           SizedBox(width: 4 * scale),
           widget.buildStatusIndicator(widget.statusForUi(message), scale),
@@ -996,10 +1067,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           children: [
             Text(
               message.formattedTime,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 11 * scale,
-              ),
+              style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
             ),
           ],
         ),
@@ -1016,10 +1084,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         children: [
           Text(
             message.formattedTime,
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 11 * scale,
-            ),
+            style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
           ),
           const Spacer(),
           _buildFooterSaveAction(message, scale),
@@ -1083,7 +1148,9 @@ class _VideoThumbnailWidgetState extends State<_VideoThumbnailWidget> {
     try {
       // Prefer the local file path if present, otherwise network/cached URL.
       VideoPlayerController controller;
-      if (widget.localFilePath != null && widget.localFilePath!.isNotEmpty && File(widget.localFilePath!).existsSync()) {
+      if (widget.localFilePath != null &&
+          widget.localFilePath!.isNotEmpty &&
+          File(widget.localFilePath!).existsSync()) {
         controller = VideoPlayerController.file(File(widget.localFilePath!));
       } else if (widget.videoUrl != null && widget.videoUrl!.isNotEmpty) {
         final cached = await DefaultCacheManager().getFileFromCache(
@@ -1098,13 +1165,11 @@ class _VideoThumbnailWidgetState extends State<_VideoThumbnailWidget> {
           // Fire-and-forget: warm the cache so subsequent opens (and
           // offline reopens) play instantly from disk. Errors are
           // expected on flaky networks; just swallow them here.
-          unawaited(
-            () async {
-              try {
-                await DefaultCacheManager().downloadFile(widget.videoUrl!);
-              } catch (_) {}
-            }(),
-          );
+          unawaited(() async {
+            try {
+              await DefaultCacheManager().downloadFile(widget.videoUrl!);
+            } catch (_) {}
+          }());
         }
       } else {
         throw Exception('No video source provided');
@@ -1144,11 +1209,7 @@ class _VideoThumbnailWidgetState extends State<_VideoThumbnailWidget> {
       return Container(
         color: Colors.grey[900],
         child: const Center(
-          child: Icon(
-            Icons.videocam,
-            color: Colors.white38,
-            size: 48,
-          ),
+          child: Icon(Icons.videocam, color: Colors.white38, size: 48),
         ),
       );
     }

@@ -61,7 +61,8 @@ class InAppUpdatePrompt {
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
-const int _updateAvailableNotificationId = 9001; // reuse the existing app_update channel id slot
+const int _updateAvailableNotificationId =
+    9001; // reuse the existing app_update channel id slot
 const int _downloadProgressNotificationId = 9002;
 const int _readyToInstallNotificationId = 9003;
 const String _updateDownloadChannelId = 'app_update_download';
@@ -90,14 +91,16 @@ class BackgroundUpdateService {
 
   // ── Public state notifiers ─────────────────────────────────────────────────
 
-  final ValueNotifier<BackgroundUpdateState> state =
-      ValueNotifier(const BackgroundUpdateState.idle());
+  final ValueNotifier<BackgroundUpdateState> state = ValueNotifier(
+    const BackgroundUpdateState.idle(),
+  );
 
   /// Fires when an in-app "Update available" SnackBar should be shown.
   /// The lobby screen listens to this and renders the SnackBar with
   /// [Download Now] / [Later] buttons.
-  final ValueNotifier<InAppUpdatePrompt?> pendingInAppPrompt =
-      ValueNotifier(null);
+  final ValueNotifier<InAppUpdatePrompt?> pendingInAppPrompt = ValueNotifier(
+    null,
+  );
 
   // ── Private fields ─────────────────────────────────────────────────────────
 
@@ -122,7 +125,9 @@ class BackgroundUpdateService {
   Future<void> _ensureNotificationsInitialized() async {
     if (_notificationsInitialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
@@ -130,7 +135,11 @@ class BackgroundUpdateService {
     );
 
     await _localNotifications.initialize(
-      const InitializationSettings(android: androidSettings, iOS: iosSettings),
+      const InitializationSettings(
+        android: androidSettings,
+        iOS: iosSettings,
+        macOS: iosSettings,
+      ),
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
 
@@ -173,7 +182,9 @@ class BackgroundUpdateService {
       final apkBuild = build ?? 0;
 
       if (apkBuild > 0 && installedBuild > 0 && apkBuild <= installedBuild) {
-        _log('Persisted APK (build $apkBuild) is not newer than installed (build $installedBuild) — clearing.');
+        _log(
+          'Persisted APK (build $apkBuild) is not newer than installed (build $installedBuild) — clearing.',
+        );
         await _clearPersistedApk();
         return;
       }
@@ -204,7 +215,9 @@ class BackgroundUpdateService {
         releaseNotes: '',
       );
 
-      _log('Restored ready-to-install APK: $apkPath (v${info.version}+${info.buildNumber})');
+      _log(
+        'Restored ready-to-install APK: $apkPath (v${info.version}+${info.buildNumber})',
+      );
       state.value = BackgroundUpdateState.readyToInstall(
         apkPath: apkPath,
         versionInfo: info,
@@ -238,7 +251,9 @@ class BackgroundUpdateService {
     String downloadUrl,
   ) async {
     if (!Platform.isAndroid) {
-      _log('Background download is Android-only. Skipping on ${Platform.operatingSystem}.');
+      _log(
+        'Background download is Android-only. Skipping on ${Platform.operatingSystem}.',
+      );
       return;
     }
 
@@ -255,7 +270,9 @@ class BackgroundUpdateService {
     // Check if we already have a valid APK for this version on disk
     final existingApk = await _findExistingApk(info);
     if (existingApk != null) {
-      _log('Reusing existing APK for v${info.version}+${info.buildNumber}: $existingApk');
+      _log(
+        'Reusing existing APK for v${info.version}+${info.buildNumber}: $existingApk',
+      );
       await _persistApkState(existingApk, info);
       state.value = BackgroundUpdateState.readyToInstall(
         apkPath: existingApk,
@@ -265,7 +282,9 @@ class BackgroundUpdateService {
       return;
     }
 
-    _log('Starting background download of v${info.version}+${info.buildNumber} from $downloadUrl');
+    _log(
+      'Starting background download of v${info.version}+${info.buildNumber} from $downloadUrl',
+    );
     await _ensureNotificationsInitialized();
 
     state.value = BackgroundUpdateState.downloading(
@@ -321,7 +340,9 @@ class BackgroundUpdateService {
     String downloadUrl,
   ) async {
     if (!Platform.isAndroid) {
-      _log('notifyUpdateAvailable is Android-only — skipping on ${Platform.operatingSystem}.');
+      _log(
+        'notifyUpdateAvailable is Android-only — skipping on ${Platform.operatingSystem}.',
+      );
       return;
     }
 
@@ -404,7 +425,10 @@ class BackgroundUpdateService {
     try {
       final authToken = await StorageService.getToken();
       final tempDir = await getTemporaryDirectory();
-      final safeVersion = info.version.replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');
+      final safeVersion = info.version.replaceAll(
+        RegExp(r'[^0-9A-Za-z._-]'),
+        '_',
+      );
       final buildSuffix = info.buildNumber > 0 ? '_b${info.buildNumber}' : '';
       final apkPath = '${tempDir.path}/app_update_$safeVersion$buildSuffix.apk';
 
@@ -452,7 +476,9 @@ class BackgroundUpdateService {
           bytes[1] != 0x4B ||
           bytes[2] != 0x03 ||
           bytes[3] != 0x04) {
-        throw Exception('Downloaded file is not a valid APK (bad magic bytes).');
+        throw Exception(
+          'Downloaded file is not a valid APK (bad magic bytes).',
+        );
       }
 
       final file = File(apkPath);
@@ -479,7 +505,9 @@ class BackgroundUpdateService {
       await _cancelDownloadNotification();
     } catch (e) {
       _log('Download failed: $e');
-      state.value = BackgroundUpdateState.failed(errorMessage: 'Download failed: $e');
+      state.value = BackgroundUpdateState.failed(
+        errorMessage: 'Download failed: $e',
+      );
       await _cancelDownloadNotification();
     }
   }
@@ -672,7 +700,9 @@ class BackgroundUpdateService {
         unawaited(launchInstaller());
       }
     } catch (e) {
-      debugPrint('[BackgroundUpdateService] Error handling notification tap: $e');
+      debugPrint(
+        '[BackgroundUpdateService] Error handling notification tap: $e',
+      );
     }
   }
 }

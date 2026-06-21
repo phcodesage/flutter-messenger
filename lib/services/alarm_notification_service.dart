@@ -4,29 +4,37 @@ import 'package:timezone/data/latest.dart' as tz;
 import '../models/alarm.dart';
 
 class AlarmNotificationService {
-  static final AlarmNotificationService _instance = AlarmNotificationService._internal();
+  static final AlarmNotificationService _instance =
+      AlarmNotificationService._internal();
   factory AlarmNotificationService() => _instance;
   AlarmNotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
 
   Future<void> initialize() async {
     tz.initializeTimeZones();
-    
-    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
 
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const DarwinInitializationSettings darwinSettings =
+        DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        );
+
+    // Darwin settings cover both iOS and macOS. Passing `macOS` is required when
+    // running on macOS desktop, otherwise `initialize` throws "macOS settings
+    // must be set" and aborts app startup (black screen).
     const InitializationSettings settings = InitializationSettings(
       android: androidSettings,
-      iOS: iosSettings,
+      iOS: darwinSettings,
+      macOS: darwinSettings,
     );
 
     await _notifications.initialize(settings);
-    
+
     // Create alarm channel for Android
     const AndroidNotificationChannel channel = AndroidNotificationChannel(
       'alarms_channel',
@@ -38,7 +46,9 @@ class AlarmNotificationService {
     );
 
     await _notifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(channel);
   }
 
@@ -49,7 +59,7 @@ class AlarmNotificationService {
     // For this implementation, we'll assume that any active alarm in the list should be scheduled,
     // and we'll trust the overwrite behavior for existing IDs.
     // To truly "clear" old ones, we'd need to track which IDs we've used.
-    
+
     for (final alarm in alarms) {
       final int baseId = (alarm.id ?? 0) * 10;
       // IDs baseId+1..baseId+7 are the seven weekday schedules; baseId+8 is
@@ -78,7 +88,12 @@ class AlarmNotificationService {
         for (int day = 1; day <= 7; day++) {
           await _notifications.cancel(baseId + day);
         }
-        await _scheduleOneTimeAlarm(alarm, hour, minute, baseId + oneTimeOffset);
+        await _scheduleOneTimeAlarm(
+          alarm,
+          hour,
+          minute,
+          baseId + oneTimeOffset,
+        );
         continue;
       }
 
@@ -97,9 +112,13 @@ class AlarmNotificationService {
     }
   }
 
-  Future<void> schedulePomodoro(String title, String body, Duration delay) async {
+  Future<void> schedulePomodoro(
+    String title,
+    String body,
+    Duration delay,
+  ) async {
     final scheduledDate = tz.TZDateTime.now(tz.local).add(delay);
-    
+
     await _notifications.zonedSchedule(
       5555,
       title,
@@ -120,7 +139,8 @@ class AlarmNotificationService {
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
 
@@ -131,7 +151,7 @@ class AlarmNotificationService {
   List<int> _parseDays(String daysStr) {
     final List<int> days = [];
     final parts = daysStr.split(',').map((e) => e.trim()).toList();
-    
+
     if (parts.contains('Mon')) days.add(DateTime.monday);
     if (parts.contains('Tue')) days.add(DateTime.tuesday);
     if (parts.contains('Wed')) days.add(DateTime.wednesday);
@@ -139,7 +159,7 @@ class AlarmNotificationService {
     if (parts.contains('Fri')) days.add(DateTime.friday);
     if (parts.contains('Sat')) days.add(DateTime.saturday);
     if (parts.contains('Sun')) days.add(DateTime.sunday);
-    
+
     return days;
   }
 
@@ -150,8 +170,14 @@ class AlarmNotificationService {
     int notificationId,
   ) async {
     final now = tz.TZDateTime.now(tz.local);
-    var scheduledDate =
-        tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
+    var scheduledDate = tz.TZDateTime(
+      tz.local,
+      now.year,
+      now.month,
+      now.day,
+      hour,
+      minute,
+    );
 
     // If the time has already passed today, fire tomorrow instead.
     if (!scheduledDate.isAfter(now)) {
@@ -185,15 +211,27 @@ class AlarmNotificationService {
     );
   }
 
-  Future<void> _scheduleWeeklyAlarm(Alarm alarm, int day, int hour, int minute) async {
+  Future<void> _scheduleWeeklyAlarm(
+    Alarm alarm,
+    int day,
+    int hour,
+    int minute,
+  ) async {
     final now = tz.TZDateTime.now(tz.local);
-    var scheduledDate = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-    
+    var scheduledDate = tz.TZDateTime(
+      tz.local,
+      now.year,
+      now.month,
+      now.day,
+      hour,
+      minute,
+    );
+
     // Adjust to the correct day of the week
     while (scheduledDate.weekday != day) {
       scheduledDate = scheduledDate.add(const Duration(days: 1));
     }
-    
+
     // If it's today but already passed, move to next week
     if (scheduledDate.isBefore(now)) {
       scheduledDate = scheduledDate.add(const Duration(days: 7));
@@ -223,10 +261,11 @@ class AlarmNotificationService {
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
     );
-    
+
     // debugPrint('Scheduled alarm "${alarm.name}" for day $day at $hour:$minute (ID: $notificationId)');
   }
 }

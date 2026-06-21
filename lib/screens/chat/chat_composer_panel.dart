@@ -30,6 +30,7 @@ class ChatComposerPanel extends StatelessWidget {
     required this.sendToManyQuickAction,
     required this.unifiedActionsBar,
     required this.inlineEmojiPickerBuilder,
+    this.actionsBelowInput = false,
   });
 
   final double scale;
@@ -46,13 +47,22 @@ class ChatComposerPanel extends StatelessWidget {
   final TextEditingController messageController;
   final FocusNode inputFocusNode;
   final ScrollController inputScrollController;
-  final Widget Function({required bool showLabel, required double iconSize, required EdgeInsets padding}) buildDoorbellComposerButton;
+  final Widget Function({
+    required bool showLabel,
+    required double iconSize,
+    required EdgeInsets padding,
+  })
+  buildDoorbellComposerButton;
   final bool Function(String, TextStyle, double) isComposerMultiline;
   final Widget editPreview;
   final Widget replyPreview;
   final Widget sendToManyQuickAction;
   final Widget unifiedActionsBar;
   final Widget Function(double) inlineEmojiPickerBuilder;
+
+  /// When true (desktop/web layout) the action buttons render *below* the
+  /// message input to mirror the web composer. Mobile keeps them above.
+  final bool actionsBelowInput;
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +104,8 @@ class ChatComposerPanel extends StatelessWidget {
             editPreview,
             replyPreview,
             sendToManyQuickAction,
-            if (!showEmojiPicker) unifiedActionsBar,
+            // Mobile: actions above the input. Desktop: below (see end of Column).
+            if (!actionsBelowInput && !showEmojiPicker) unifiedActionsBar,
             ValueListenableBuilder<TextEditingValue>(
               valueListenable: messageController,
               child: stableInput,
@@ -152,11 +163,13 @@ class ChatComposerPanel extends StatelessWidget {
                                       onPressed: onShowEmojiPickerModal,
                                       icon: showEmojiPicker
                                           ? Icons.keyboard_outlined
-                                          : Icons.sentiment_satisfied_alt_outlined,
+                                          : Icons
+                                                .sentiment_satisfied_alt_outlined,
                                       iconSize: 24 * scale,
                                       padding: EdgeInsets.all(6 * scale),
-                                      tooltip:
-                                          showEmojiPicker ? 'Keyboard' : 'Emoji',
+                                      tooltip: showEmojiPicker
+                                          ? 'Keyboard'
+                                          : 'Emoji',
                                     ),
                                   ),
                                   Expanded(child: child!),
@@ -185,15 +198,15 @@ class ChatComposerPanel extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: sendButtonColor,
                                 foregroundColor: Colors.white,
-                                overlayColor: Colors.white
-                                    .withValues(alpha: 0.22),
+                                overlayColor: Colors.white.withValues(
+                                  alpha: 0.22,
+                                ),
                                 padding: EdgeInsets.symmetric(
                                   horizontal: 14 * scale,
                                   vertical: 10 * scale,
                                 ),
                                 minimumSize: const Size(0, 0),
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(20),
                                 ),
@@ -214,6 +227,8 @@ class ChatComposerPanel extends StatelessWidget {
                 );
               },
             ),
+            // Desktop: actions below the input to mirror the web composer.
+            if (actionsBelowInput && !showEmojiPicker) unifiedActionsBar,
             if (showEmojiPicker) inlineEmojiPickerBuilder(stablePanelHeight),
           ],
         ),
@@ -283,24 +298,20 @@ class _ComposerInput extends StatelessWidget {
         radius: const Radius.circular(2),
         child: Shortcuts(
           shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(
-              LogicalKeyboardKey.keyV,
-              meta: true,
-            ): _ComposerPasteImageIntent(),
-            SingleActivator(
-              LogicalKeyboardKey.keyV,
-              control: true,
-            ): _ComposerPasteImageIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, meta: true):
+                _ComposerPasteImageIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, control: true):
+                _ComposerPasteImageIntent(),
           },
           child: Actions(
             actions: <Type, Action<Intent>>{
               _ComposerPasteImageIntent:
                   CallbackAction<_ComposerPasteImageIntent>(
-                onInvoke: (intent) {
-                  onClipboardPasteShortcut();
-                  return null;
-                },
-              ),
+                    onInvoke: (intent) {
+                      onClipboardPasteShortcut();
+                      return null;
+                    },
+                  ),
             },
             child: TextField(
               key: const ValueKey('message_input'),
@@ -360,12 +371,13 @@ class _ComposerInput extends StatelessWidget {
               keyboardType: TextInputType.multiline,
               textCapitalization: TextCapitalization.sentences,
               enableInteractiveSelection: true,
-              // Keep the IME from re-composing/selecting the word you tap into
-              // (which made it replace the word instead of inserting). The app
-              // runs its own auto-correction (_applyAutoCorrection), so the
-              // keyboard's is redundant here.
-              autocorrect: false,
-              enableSuggestions: false,
+              // Keep the keyboard's suggestion strip and voice-input mic
+              // available (Gboard hides both when enableSuggestions is false).
+              // The word-replacement-on-tap bug that prompted disabling these is
+              // already prevented elsewhere: every TextEditingValue we set
+              // clears the composing region (composing: TextRange.empty).
+              autocorrect: true,
+              enableSuggestions: true,
               stylusHandwritingEnabled: false,
             ),
           ),

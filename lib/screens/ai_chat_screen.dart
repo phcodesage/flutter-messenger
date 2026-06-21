@@ -37,7 +37,8 @@ class AiChatScreen extends StatefulWidget {
   State<AiChatScreen> createState() => _AiChatScreenState();
 }
 
-class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver {
+class _AiChatScreenState extends State<AiChatScreen>
+    with WidgetsBindingObserver {
   final List<Map<String, String>> _messages = <Map<String, String>>[];
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -75,77 +76,855 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
 
   int _emojiCategoryIndex = 0;
 
-  static const Map<String, String> _autoCorrectionDictionary =
-      <String, String>{
-        'u': 'you',
-        'ur': 'your',
-        'pls': 'please',
-        'thx': 'thanks',
-        'im': "I'm",
-      };
+  static const Map<String, String> _autoCorrectionDictionary = <String, String>{
+    'u': 'you',
+    'ur': 'your',
+    'pls': 'please',
+    'thx': 'thanks',
+    'im': "I'm",
+  };
 
   static const List<Map<String, dynamic>> _emojiCategories = [
     {
       'icon': '😀',
       'label': 'Smileys',
       'emojis': [
-        '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '🥲', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🥸', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🫣', '🤭', '🫢', '🫡', '🤫', '🫠', '🤥', '😶', '😐', '😑', '😬', '🫨', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '😵‍💫', '🫥', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠', '😈', '👿', '👹', '👺', '🤡', '💩', '👻', '💀', '☠️', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'
+        '😀',
+        '😃',
+        '😄',
+        '😁',
+        '😆',
+        '😅',
+        '😂',
+        '🤣',
+        '🥲',
+        '😊',
+        '😇',
+        '🙂',
+        '🙃',
+        '😉',
+        '😌',
+        '😍',
+        '🥰',
+        '😘',
+        '😗',
+        '😙',
+        '😚',
+        '😋',
+        '😛',
+        '😝',
+        '😜',
+        '🤪',
+        '🤨',
+        '🧐',
+        '🤓',
+        '😎',
+        '🥸',
+        '🤩',
+        '🥳',
+        '😏',
+        '😒',
+        '😞',
+        '😔',
+        '😟',
+        '😕',
+        '🙁',
+        '😣',
+        '😖',
+        '😫',
+        '😩',
+        '🥺',
+        '😢',
+        '😭',
+        '😤',
+        '😠',
+        '😡',
+        '🤬',
+        '🤯',
+        '😳',
+        '🥵',
+        '🥶',
+        '😱',
+        '😨',
+        '😰',
+        '😥',
+        '😓',
+        '🤗',
+        '🤔',
+        '🫣',
+        '🤭',
+        '🫢',
+        '🫡',
+        '🤫',
+        '🫠',
+        '🤥',
+        '😶',
+        '😐',
+        '😑',
+        '😬',
+        '🫨',
+        '🙄',
+        '😯',
+        '😦',
+        '😧',
+        '😮',
+        '😲',
+        '🥱',
+        '😴',
+        '🤤',
+        '😪',
+        '😵',
+        '😵‍💫',
+        '🫥',
+        '🤐',
+        '🥴',
+        '🤢',
+        '🤮',
+        '🤧',
+        '😷',
+        '🤒',
+        '🤕',
+        '🤑',
+        '🤠',
+        '😈',
+        '👿',
+        '👹',
+        '👺',
+        '🤡',
+        '💩',
+        '👻',
+        '💀',
+        '☠️',
+        '👽',
+        '👾',
+        '🤖',
+        '🎃',
+        '😺',
+        '😸',
+        '😹',
+        '😻',
+        '😼',
+        '😽',
+        '🙀',
+        '😿',
+        '😾',
       ],
     },
     {
       'icon': '👋',
       'label': 'Gestures',
       'emojis': [
-        '👋', '🤚', '🖐️', '✋', '🖖', '🫱', '🫲', '🫳', '🫴', '👌', '🤌', '🤏', '✌️', '🤞', '🫰', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '🫵', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '🫶', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁️', '👅', '👄', '🫦', '💋'
+        '👋',
+        '🤚',
+        '🖐️',
+        '✋',
+        '🖖',
+        '🫱',
+        '🫲',
+        '🫳',
+        '🫴',
+        '👌',
+        '🤌',
+        '🤏',
+        '✌️',
+        '🤞',
+        '🫰',
+        '🤟',
+        '🤘',
+        '🤙',
+        '👈',
+        '👉',
+        '👆',
+        '🖕',
+        '👇',
+        '☝️',
+        '🫵',
+        '👍',
+        '👎',
+        '✊',
+        '👊',
+        '🤛',
+        '🤜',
+        '👏',
+        '🙌',
+        '🫶',
+        '👐',
+        '🤲',
+        '🤝',
+        '🙏',
+        '✍️',
+        '💅',
+        '🤳',
+        '💪',
+        '🦾',
+        '🦿',
+        '🦵',
+        '🦶',
+        '👂',
+        '🦻',
+        '👃',
+        '🧠',
+        '🫀',
+        '🫁',
+        '🦷',
+        '🦴',
+        '👀',
+        '👁️',
+        '👅',
+        '👄',
+        '🫦',
+        '💋',
       ],
     },
     {
       'icon': '❤️',
       'label': 'Hearts',
       'emojis': [
-        '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '❤️‍🔥', '❤️‍🩹', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '♥️', '🩷', '🩵', '🩶', '💌', '💐', '🌹', '🥀', '🌺', '🌸', '🌷', '🌻', '💑', '👩‍❤️‍👨', '👨‍❤️‍👨', '👩‍❤️‍👩', '💏', '😍', '🥰', '😘', '😻', '💒', '🏩'
+        '❤️',
+        '🧡',
+        '💛',
+        '💚',
+        '💙',
+        '💜',
+        '🖤',
+        '🤍',
+        '🤎',
+        '❤️‍🔥',
+        '❤️‍🩹',
+        '💔',
+        '❣️',
+        '💕',
+        '💞',
+        '💓',
+        '💗',
+        '💖',
+        '💘',
+        '💝',
+        '💟',
+        '♥️',
+        '🩷',
+        '🩵',
+        '🩶',
+        '💌',
+        '💐',
+        '🌹',
+        '🥀',
+        '🌺',
+        '🌸',
+        '🌷',
+        '🌻',
+        '💑',
+        '👩‍❤️‍👨',
+        '👨‍❤️‍👨',
+        '👩‍❤️‍👩',
+        '💏',
+        '😍',
+        '🥰',
+        '😘',
+        '😻',
+        '💒',
+        '🏩',
       ],
     },
     {
       'icon': '🐱',
       'label': 'Animals',
       'emojis': [
-        '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐻‍❄️', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🙈', '🙉', '🙊', '🐒', '🐔', '🐧', '🐦', '🐤', '🐣', '🐥', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🪱', '🐛', '🦋', '🐌', '🐞', '🐜', '🪰', '🪲', '🪳', '🦟', '🦗', '🕷️', '🦂', '🐢', '🐍', '🦎', '🦖', '🦕', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋', '🦈', '🦭', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🦬'
+        '🐶',
+        '🐱',
+        '🐭',
+        '🐹',
+        '🐰',
+        '🦊',
+        '🐻',
+        '🐼',
+        '🐻‍❄️',
+        '🐨',
+        '🐯',
+        '🦁',
+        '🐮',
+        '🐷',
+        '🐸',
+        '🐵',
+        '🙈',
+        '🙉',
+        '🙊',
+        '🐒',
+        '🐔',
+        '🐧',
+        '🐦',
+        '🐤',
+        '🐣',
+        '🐥',
+        '🦆',
+        '🦅',
+        '🦉',
+        '🦇',
+        '🐺',
+        '🐗',
+        '🐴',
+        '🦄',
+        '🐝',
+        '🪱',
+        '🐛',
+        '🦋',
+        '🐌',
+        '🐞',
+        '🐜',
+        '🪰',
+        '🪲',
+        '🪳',
+        '🦟',
+        '🦗',
+        '🕷️',
+        '🦂',
+        '🐢',
+        '🐍',
+        '🦎',
+        '🦖',
+        '🦕',
+        '🐙',
+        '🦑',
+        '🦐',
+        '🦞',
+        '🦀',
+        '🐡',
+        '🐠',
+        '🐟',
+        '🐬',
+        '🐳',
+        '🐋',
+        '🦈',
+        '🦭',
+        '🐊',
+        '🐅',
+        '🐆',
+        '🦓',
+        '🦍',
+        '🦧',
+        '🐘',
+        '🦛',
+        '🦏',
+        '🐪',
+        '🐫',
+        '🦒',
+        '🦘',
+        '🦬',
       ],
     },
     {
       'icon': '🍕',
       'label': 'Food',
       'emojis': [
-        '🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶️', '🫑', '🌽', '🥕', '🫒', '🧄', '🧅', '🥔', '🍠', '🥐', '🥯', '🍞', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🌭', '🍔', '🍟', '🍕', '🫓', '🥪', '🥙', '🧆', '🌮', '🌯', '🫔', '🥗', '🥘', '🫕', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '☕', '🍵', '🧃', '🥤', '🧋', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉'
+        '🍏',
+        '🍎',
+        '🍐',
+        '🍊',
+        '🍋',
+        '🍌',
+        '🍉',
+        '🍇',
+        '🍓',
+        '🫐',
+        '🍈',
+        '🍒',
+        '🍑',
+        '🥭',
+        '🍍',
+        '🥥',
+        '🥝',
+        '🍅',
+        '🍆',
+        '🥑',
+        '🥦',
+        '🥬',
+        '🥒',
+        '🌶️',
+        '🫑',
+        '🌽',
+        '🥕',
+        '🫒',
+        '🧄',
+        '🧅',
+        '🥔',
+        '🍠',
+        '🥐',
+        '🥯',
+        '🍞',
+        '🥖',
+        '🥨',
+        '🧀',
+        '🥚',
+        '🍳',
+        '🧈',
+        '🥞',
+        '🧇',
+        '🥓',
+        '🥩',
+        '🍗',
+        '🍖',
+        '🌭',
+        '🍔',
+        '🍟',
+        '🍕',
+        '🫓',
+        '🥪',
+        '🥙',
+        '🧆',
+        '🌮',
+        '🌯',
+        '🫔',
+        '🥗',
+        '🥘',
+        '🫕',
+        '🍝',
+        '🍜',
+        '🍲',
+        '🍛',
+        '🍣',
+        '🍱',
+        '🥟',
+        '🦪',
+        '🍤',
+        '🍙',
+        '🍚',
+        '🍘',
+        '🍥',
+        '🥠',
+        '🥮',
+        '🍢',
+        '🍡',
+        '🍧',
+        '🍨',
+        '🍦',
+        '🥧',
+        '🧁',
+        '🍰',
+        '🎂',
+        '🍮',
+        '🍭',
+        '🍬',
+        '🍫',
+        '🍩',
+        '🍪',
+        '🌰',
+        '🥜',
+        '🍯',
+        '🥛',
+        '🍼',
+        '☕',
+        '🍵',
+        '🧃',
+        '🥤',
+        '🧋',
+        '🍶',
+        '🍺',
+        '🍻',
+        '🥂',
+        '🍷',
+        '🥃',
+        '🍸',
+        '🍹',
+        '🧉',
       ],
     },
     {
       'icon': '⚽',
       'label': 'Activities',
       'emojis': [
-        '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛼', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️', '🤼', '🤸', '🤺', '⛹️', '🤾', '🏌️', '🏇', '🧘', '🏄', '🏊', '🤽', '🚣', '🧗', '🚵', '🚴', '🏆', '🥇', '🥈', '🥉', '🏅', '🎖️', '🏵️', '🎗️', '🎪', '🤹', '🎭', '🩰', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🪘', '🎷', '🎺', '🪗', '🎸', '🪕', '🎻', '🎲', '♟️', '🎯', '🎳', '🎮', '🕹️', '🧩'
+        '⚽',
+        '🏀',
+        '🏈',
+        '⚾',
+        '🥎',
+        '🎾',
+        '🏐',
+        '🏉',
+        '🥏',
+        '🎱',
+        '🪀',
+        '🏓',
+        '🏸',
+        '🏒',
+        '🏑',
+        '🥍',
+        '🏏',
+        '🪃',
+        '🥅',
+        '⛳',
+        '🪁',
+        '🏹',
+        '🎣',
+        '🤿',
+        '🥊',
+        '🥋',
+        '🎽',
+        '🛹',
+        '🛼',
+        '🛷',
+        '⛸️',
+        '🥌',
+        '🎿',
+        '⛷️',
+        '🏂',
+        '🪂',
+        '🏋️',
+        '🤼',
+        '🤸',
+        '🤺',
+        '⛹️',
+        '🤾',
+        '🏌️',
+        '🏇',
+        '🧘',
+        '🏄',
+        '🏊',
+        '🤽',
+        '🚣',
+        '🧗',
+        '🚵',
+        '🚴',
+        '🏆',
+        '🥇',
+        '🥈',
+        '🥉',
+        '🏅',
+        '🎖️',
+        '🏵️',
+        '🎗️',
+        '🎪',
+        '🤹',
+        '🎭',
+        '🩰',
+        '🎨',
+        '🎬',
+        '🎤',
+        '🎧',
+        '🎼',
+        '🎹',
+        '🥁',
+        '🪘',
+        '🎷',
+        '🎺',
+        '🪗',
+        '🎸',
+        '🪕',
+        '🎻',
+        '🎲',
+        '♟️',
+        '🎯',
+        '🎳',
+        '🎮',
+        '🕹️',
+        '🧩',
       ],
     },
     {
       'icon': '🚗',
       'label': 'Travel',
       'emojis': [
-        '🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🏍️', '🛵', '🚲', '🛴', '🛺', '🚔', '🚍', '🚘', '🚖', '🛞', '🚡', '🚠', '🚟', '🚃', '🚋', '🚞', '🚝', '🚄', '🚅', '🚈', '🚂', '🚆', '🚇', '🚊', '🚉', '✈️', '🛫', '🛬', '🛩️', '💺', '🛰️', '🚀', '🛸', '🚁', '🛶', '⛵', '🚤', '🛥️', '🛳️', '⛴️', '🚢', '🗼', '🏰', '🏯', '🏟️', '🎡', '🎢', '🎠', '⛲', '⛱️', '🏖️', '🏝️', '🏜️', '🌋', '⛰️', '🏔️', '🗻', '🏕️', '🛖', '🏠', '🏡', '🏢', '🏬', '🏣', '🏤', '🏥'
+        '🚗',
+        '🚕',
+        '🚙',
+        '🚌',
+        '🚎',
+        '🏎️',
+        '🚓',
+        '🚑',
+        '🚒',
+        '🚐',
+        '🛻',
+        '🚚',
+        '🚛',
+        '🚜',
+        '🏍️',
+        '🛵',
+        '🚲',
+        '🛴',
+        '🛺',
+        '🚔',
+        '🚍',
+        '🚘',
+        '🚖',
+        '🛞',
+        '🚡',
+        '🚠',
+        '🚟',
+        '🚃',
+        '🚋',
+        '🚞',
+        '🚝',
+        '🚄',
+        '🚅',
+        '🚈',
+        '🚂',
+        '🚆',
+        '🚇',
+        '🚊',
+        '🚉',
+        '✈️',
+        '🛫',
+        '🛬',
+        '🛩️',
+        '💺',
+        '🛰️',
+        '🚀',
+        '🛸',
+        '🚁',
+        '🛶',
+        '⛵',
+        '🚤',
+        '🛥️',
+        '🛳️',
+        '⛴️',
+        '🚢',
+        '🗼',
+        '🏰',
+        '🏯',
+        '🏟️',
+        '🎡',
+        '🎢',
+        '🎠',
+        '⛲',
+        '⛱️',
+        '🏖️',
+        '🏝️',
+        '🏜️',
+        '🌋',
+        '⛰️',
+        '🏔️',
+        '🗻',
+        '🏕️',
+        '🛖',
+        '🏠',
+        '🏡',
+        '🏢',
+        '🏬',
+        '🏣',
+        '🏤',
+        '🏥',
       ],
     },
     {
       'icon': '💡',
       'label': 'Objects',
       'emojis': [
-        '🔥', '💧', '🌟', '⭐', '✨', '💫', '🌈', '☀️', '🌤️', '⛅', '🎉', '🎊', '🎈', '🎁', '🎀', '🎄', '🪅', '🎆', '🎇', '🧨', '💡', '🔦', '🕯️', '🪔', '💎', '🔮', '🧿', '🪬', '💰', '💴', '💵', '💶', '💷', '🪙', '💳', '💸', '🧲', '🔧', '🪛', '🔩', '⚙️', '🧰', '🪜', '🧱', '🪨', '🪵', '🔗', '🧬', '🔬', '🔭', '📡', '💉', '🩸', '💊', '🩹', '🩼', '🩺', '🩻', '🚪', '🛗', '🪞', '🪟', '🛏️', '🛋️', '🪑', '🚽', '🪠', '🚿', '🛁', '🪤', '📱', '💻', '⌨️', '🖥️', '🖨️', '🖱️', '💾', '💿', '📀', '📷', '📸', '📹', '🎥', '📽️', '🎞️', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙️', '🎚️', '🎛️', '🧭', '⏱️', '⏲️', '⏰', '🕰️', '📡'
+        '🔥',
+        '💧',
+        '🌟',
+        '⭐',
+        '✨',
+        '💫',
+        '🌈',
+        '☀️',
+        '🌤️',
+        '⛅',
+        '🎉',
+        '🎊',
+        '🎈',
+        '🎁',
+        '🎀',
+        '🎄',
+        '🪅',
+        '🎆',
+        '🎇',
+        '🧨',
+        '💡',
+        '🔦',
+        '🕯️',
+        '🪔',
+        '💎',
+        '🔮',
+        '🧿',
+        '🪬',
+        '💰',
+        '💴',
+        '💵',
+        '💶',
+        '💷',
+        '🪙',
+        '💳',
+        '💸',
+        '🧲',
+        '🔧',
+        '🪛',
+        '🔩',
+        '⚙️',
+        '🧰',
+        '🪜',
+        '🧱',
+        '🪨',
+        '🪵',
+        '🔗',
+        '🧬',
+        '🔬',
+        '🔭',
+        '📡',
+        '💉',
+        '🩸',
+        '💊',
+        '🩹',
+        '🩼',
+        '🩺',
+        '🩻',
+        '🚪',
+        '🛗',
+        '🪞',
+        '🪟',
+        '🛏️',
+        '🛋️',
+        '🪑',
+        '🚽',
+        '🪠',
+        '🚿',
+        '🛁',
+        '🪤',
+        '📱',
+        '💻',
+        '⌨️',
+        '🖥️',
+        '🖨️',
+        '🖱️',
+        '💾',
+        '💿',
+        '📀',
+        '📷',
+        '📸',
+        '📹',
+        '🎥',
+        '📽️',
+        '🎞️',
+        '📞',
+        '☎️',
+        '📟',
+        '📠',
+        '📺',
+        '📻',
+        '🎙️',
+        '🎚️',
+        '🎛️',
+        '🧭',
+        '⏱️',
+        '⏲️',
+        '⏰',
+        '🕰️',
+        '📡',
       ],
     },
     {
       'icon': '🏁',
       'label': 'Symbols',
       'emojis': [
-        '🏳️', '🏴', '🏁', '🚩', '🏳️‍🌈', '🏳️‍⚧️', '🏴‍☠️', '✅', '❌', '❓', '❗', '‼️', '⁉️', '💯', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪', '🟤', '🔶', '🔷', '🔸', '🔹', '🔺', '🔻', '💠', '🔘', '🔳', '🔲', '▪️', '▫️', '◾', '◽', '◼️', '◻️', '🟥', '🟧', '🟨', '🟩', '🟦', '🟪', '⬛', '⬜', '🟫', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '⛎', '🔀', '🔁', '🔂', '▶️', '⏩', '⏭️', '⏯️', '◀️', '⏪', '⏮️', '🔼', '⏫', '🔽', '⏬', '⏸️', '⏹️', '⏺️', '⏏️', '🎦', '♾️', '♻️', '⚜️', '🔱', '📛', '🔰', '⭕', '✅', '☑️', '✔️', '❌', '❎', '➕', '➖', '➗', '✖️', '💲', '💱', '™️', '©️', '®️', '〰️', '➰', '➿', '🔚', '🔙', '🔛', '🔝', '🔜', '🆕'
+        '🏳️',
+        '🏴',
+        '🏁',
+        '🚩',
+        '🏳️‍🌈',
+        '🏳️‍⚧️',
+        '🏴‍☠️',
+        '✅',
+        '❌',
+        '❓',
+        '❗',
+        '‼️',
+        '⁉️',
+        '💯',
+        '🔴',
+        '🟠',
+        '🟡',
+        '🟢',
+        '🔵',
+        '🟣',
+        '⚫',
+        '⚪',
+        '🟤',
+        '🔶',
+        '🔷',
+        '🔸',
+        '🔹',
+        '🔺',
+        '🔻',
+        '💠',
+        '🔘',
+        '🔳',
+        '🔲',
+        '▪️',
+        '▫️',
+        '◾',
+        '◽',
+        '◼️',
+        '◻️',
+        '🟥',
+        '🟧',
+        '🟨',
+        '🟩',
+        '🟦',
+        '🟪',
+        '⬛',
+        '⬜',
+        '🟫',
+        '♈',
+        '♉',
+        '♊',
+        '♋',
+        '♌',
+        '♍',
+        '♎',
+        '♏',
+        '♐',
+        '♑',
+        '♒',
+        '♓',
+        '⛎',
+        '🔀',
+        '🔁',
+        '🔂',
+        '▶️',
+        '⏩',
+        '⏭️',
+        '⏯️',
+        '◀️',
+        '⏪',
+        '⏮️',
+        '🔼',
+        '⏫',
+        '🔽',
+        '⏬',
+        '⏸️',
+        '⏹️',
+        '⏺️',
+        '⏏️',
+        '🎦',
+        '♾️',
+        '♻️',
+        '⚜️',
+        '🔱',
+        '📛',
+        '🔰',
+        '⭕',
+        '✅',
+        '☑️',
+        '✔️',
+        '❌',
+        '❎',
+        '➕',
+        '➖',
+        '➗',
+        '✖️',
+        '💲',
+        '💱',
+        '™️',
+        '©️',
+        '®️',
+        '〰️',
+        '➰',
+        '➿',
+        '🔚',
+        '🔙',
+        '🔛',
+        '🔝',
+        '🔜',
+        '🆕',
       ],
     },
   ];
@@ -294,7 +1073,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
   /// Fetch latest messages from the server and merge any new ones into the list.
   Future<void> _syncMessagesFromServer() async {
     if (!mounted || _isSending || _sessionId == null) {
-      debugPrint('[AI SYNC POLL] Skipped: mounted=$mounted, isSending=$_isSending, sessionId=$_sessionId');
+      debugPrint(
+        '[AI SYNC POLL] Skipped: mounted=$mounted, isSending=$_isSending, sessionId=$_sessionId',
+      );
       return;
     }
 
@@ -302,18 +1083,21 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       final token = await StorageService.getToken();
       if (token == null) return;
 
-      final response = await http.get(
-        _aiUri('/sessions/$_sessionId/messages'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(
+            _aiUri('/sessions/$_sessionId/messages'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 200 || !mounted) return;
 
       final payload = jsonDecode(response.body) as Map<String, dynamic>;
-      final rawMessages = (payload['messages'] as List<dynamic>? ?? <dynamic>[]);
+      final rawMessages =
+          (payload['messages'] as List<dynamic>? ?? <dynamic>[]);
 
       final serverMessages = rawMessages
           .map((m) => m as Map<String, dynamic>)
@@ -337,12 +1121,19 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       // Check if there are new messages not in our local list
       final localIds = _messages.map((m) => m['id']).toSet();
       final newMessages = serverMessages
-          .where((m) => m['id'] != null && m['id']!.isNotEmpty && !localIds.contains(m['id']))
+          .where(
+            (m) =>
+                m['id'] != null &&
+                m['id']!.isNotEmpty &&
+                !localIds.contains(m['id']),
+          )
           .toList();
 
       if (newMessages.isEmpty) return;
 
-      debugPrint('[AI SYNC POLL] Found ${newMessages.length} new messages from server, updating UI');
+      debugPrint(
+        '[AI SYNC POLL] Found ${newMessages.length} new messages from server, updating UI',
+      );
       setState(() {
         _messages
           ..clear()
@@ -364,19 +1155,25 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
   }
 
   void _setupAiChatSync() {
-    _socketService.addListener('aiChatSync', _socketListenerKey, (Map<String, dynamic> payload) {
+    _socketService.addListener('aiChatSync', _socketListenerKey, (
+      Map<String, dynamic> payload,
+    ) {
       if (!mounted) return;
       final action = payload['action']?.toString() ?? '';
       final payloadSessionId = payload['session_id'] as int?;
 
-      debugPrint('🤖 [AI CHAT SCREEN] Received ai_chat_sync: action=$action, '
-          'payloadSessionId=$payloadSessionId, mySessionId=$_sessionId, '
-          'isSending=$_isSending, hasStreaming=$_hasStreamingAssistant');
+      debugPrint(
+        '🤖 [AI CHAT SCREEN] Received ai_chat_sync: action=$action, '
+        'payloadSessionId=$payloadSessionId, mySessionId=$_sessionId, '
+        'isSending=$_isSending, hasStreaming=$_hasStreamingAssistant',
+      );
 
       // If the event is for a different session, switch to it (cross-device sync).
       // This handles the case where the web started using a newer session.
       if (payloadSessionId != null && payloadSessionId != _sessionId) {
-        debugPrint('🤖 [AI CHAT SCREEN] Session mismatch: payload=$payloadSessionId vs mine=$_sessionId - switching to new session');
+        debugPrint(
+          '🤖 [AI CHAT SCREEN] Session mismatch: payload=$payloadSessionId vs mine=$_sessionId - switching to new session',
+        );
         _sessionId = payloadSessionId;
         // Reload messages from the new session
         _reloadCurrentSession();
@@ -405,13 +1202,15 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           // Content-based dedup: guard against the narrow window where _isSending
           // just flipped to false but the local bubble still has a negative ID.
           final incomingContent = msg['content']?.toString().trim() ?? '';
-          final incomingRole   = msg['role']?.toString() ?? '';
+          final incomingRole = msg['role']?.toString() ?? '';
           if (incomingContent.isNotEmpty &&
-              _messages.any((m) =>
-                  m['id'] != null &&
-                  m['id']!.startsWith('-') &&
-                  m['role'] == incomingRole &&
-                  (m['content'] ?? '').trim() == incomingContent)) {
+              _messages.any(
+                (m) =>
+                    m['id'] != null &&
+                    m['id']!.startsWith('-') &&
+                    m['role'] == incomingRole &&
+                    (m['content'] ?? '').trim() == incomingContent,
+              )) {
             break;
           }
 
@@ -423,7 +1222,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!_scrollController.hasClients) return;
             final distanceFromBottom =
-                _scrollController.position.maxScrollExtent - _scrollController.offset;
+                _scrollController.position.maxScrollExtent -
+                _scrollController.offset;
             // Always scroll during initial load, or if user is near bottom
             if (!_isInitialLoadComplete || distanceFromBottom < 100) {
               _scrollToBottom();
@@ -513,7 +1313,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       final userId = await StorageService.getUserId() ?? 0;
       final savedSessionId = await StorageService.getAiSessionId(userId);
 
-      debugPrint('[AiChatScreen] User ID: $userId, Saved session ID: $savedSessionId');
+      debugPrint(
+        '[AiChatScreen] User ID: $userId, Saved session ID: $savedSessionId',
+      );
 
       // Always fetch the current (most recently updated) session from the server
       // to stay in sync with other devices (web, etc.). The locally saved ID may
@@ -523,12 +1325,16 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
 
       if (serverSessionId != null && serverSessionId != savedSessionId) {
         // Server has a different (newer) session — switch to it.
-        _log('Server session $serverSessionId differs from local $savedSessionId, switching');
+        _log(
+          'Server session $serverSessionId differs from local $savedSessionId, switching',
+        );
         _sessionId = serverSessionId;
         await StorageService.saveAiSessionId(userId, serverSessionId);
         await _loadMessages(token, serverSessionId);
       } else if (savedSessionId != null) {
-        _log('Attempting to load messages for saved session ID: $savedSessionId');
+        _log(
+          'Attempting to load messages for saved session ID: $savedSessionId',
+        );
         final loadResult = await _loadMessages(token, savedSessionId);
         _log('Load result for session $savedSessionId: $loadResult');
         if (loadResult == _LoadResult.success) {
@@ -536,18 +1342,24 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           _log('Successfully loaded existing session: $savedSessionId');
         } else if (loadResult == _LoadResult.sessionNotFound) {
           // Session was deleted, clear the saved ID and recover from server
-          _log('Session $savedSessionId not found, clearing saved ID and recovering from server');
+          _log(
+            'Session $savedSessionId not found, clearing saved ID and recovering from server',
+          );
           await StorageService.clearAiSessionId(userId);
         } else {
           // Network error, keep the saved session ID for retry
-          _log('Network error loading session $savedSessionId, keeping for retry');
+          _log(
+            'Network error loading session $savedSessionId, keeping for retry',
+          );
           _sessionId = savedSessionId;
         }
       }
 
       // If still no valid session (network error on both paths), try server again
       if (_sessionId == null) {
-        _log('Recovering current session from server (local ID lost or absent)');
+        _log(
+          'Recovering current session from server (local ID lost or absent)',
+        );
         _sessionId = await _fetchCurrentSession(token);
         if (_sessionId != null) {
           _log('Recovered session from server: $_sessionId');
@@ -625,7 +1437,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           )
           .timeout(ApiConfig.connectionTimeout);
 
-      _log('Load messages response status: ${response.statusCode} for session $sessionId');
+      _log(
+        'Load messages response status: ${response.statusCode} for session $sessionId',
+      );
 
       if (response.statusCode == 404) {
         _log('Session $sessionId not found (404) - will create new session');
@@ -633,14 +1447,17 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       }
 
       if (response.statusCode != 200) {
-        _log('Failed to load messages for session $sessionId - status: ${response.statusCode}');
+        _log(
+          'Failed to load messages for session $sessionId - status: ${response.statusCode}',
+        );
         // Cache stays painted on a network error so the user keeps
         // seeing previously fetched messages.
         return _LoadResult.networkError;
       }
 
       final payload = jsonDecode(response.body) as Map<String, dynamic>;
-      final rawMessages = (payload['messages'] as List<dynamic>? ?? <dynamic>[]);
+      final rawMessages =
+          (payload['messages'] as List<dynamic>? ?? <dynamic>[]);
 
       final parsed = rawMessages
           .map((m) => m as Map<String, dynamic>)
@@ -654,8 +1471,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
               'id': (m['id'] ?? m['message_id'] ?? '').toString(),
               'role': m['role'].toString(),
               'content': m['content'].toString(),
-              'timestamp': (m['created_at'] ?? m['timestamp'] ?? '')
-                  .toString(),
+              'timestamp': (m['created_at'] ?? m['timestamp'] ?? '').toString(),
             },
           )
           .toList();
@@ -735,7 +1551,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       _log('Fetch current session response status: ${response.statusCode}');
 
       if (response.statusCode != 200 && response.statusCode != 201) {
-        _log('Failed to fetch current session - status: ${response.statusCode}');
+        _log(
+          'Failed to fetch current session - status: ${response.statusCode}',
+        );
         // Fall back to creating a new session the old way
         return _createSession(token);
       }
@@ -760,11 +1578,13 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     }
 
     final words = input.split(RegExp(r'\s+'));
-    return words.map((word) {
-      final lowered = word.toLowerCase();
-      final corrected = _autoCorrectionDictionary[lowered];
-      return corrected ?? word;
-    }).join(' ');
+    return words
+        .map((word) {
+          final lowered = word.toLowerCase();
+          final corrected = _autoCorrectionDictionary[lowered];
+          return corrected ?? word;
+        })
+        .join(' ');
   }
 
   Future<void> _sendMessage() async {
@@ -853,7 +1673,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
         _messages.add(<String, String>{
           'id': '-${_nextLocalMessageId++}',
           'role': 'assistant',
-          'content': 'Sorry, I encountered an error while connecting to the AI. Please try again.',
+          'content':
+              'Sorry, I encountered an error while connecting to the AI. Please try again.',
           'timestamp': DateTime.now().toIso8601String(),
         });
       });
@@ -901,9 +1722,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
         throw Exception('HTTP ${response.statusCode}');
       }
 
-      await for (final line in response.stream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())) {
+      await for (final line
+          in response.stream
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())) {
         if (!mounted) {
           break;
         }
@@ -963,7 +1785,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                 // Auto-scroll as the response grows, but only if near bottom.
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted || !_scrollController.hasClients) return;
-                  final distance = _scrollController.position.maxScrollExtent -
+                  final distance =
+                      _scrollController.position.maxScrollExtent -
                       _scrollController.offset;
                   if (distance < 150) {
                     _scrollToBottom();
@@ -1160,7 +1983,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
         final exportFile = File(savePath);
         await exportFile.writeAsString(exportContent, flush: true);
       } on FileSystemException catch (e) {
-        debugPrint('Direct export write failed, using save dialog fallback: $e');
+        debugPrint(
+          'Direct export write failed, using save dialog fallback: $e',
+        );
 
         final fallbackPath = await FilePicker.platform.saveFile(
           dialogTitle: 'Save AI Chat Export',
@@ -1245,12 +2070,14 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
   Future<void> _ensureLocalNotificationsReady() async {
     if (_localNotificationsReady) return;
 
-    const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings();
     const settings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
+      macOS: iosSettings,
     );
 
     await _localNotificationsPlugin.initialize(settings);
@@ -1293,13 +2120,27 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     try {
       final date = DateTime.parse(raw).toLocal();
       const weekdays = [
-        'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-        'Friday', 'Saturday', 'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
       ];
       const months = [
-        'January', 'February', 'March', 'April',
-        'May', 'June', 'July', 'August',
-        'September', 'October', 'November', 'December',
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
       ];
       return '${weekdays[date.weekday - 1]}, ${months[date.month - 1]} ${date.day}, ${date.year}';
     } catch (_) {
@@ -1639,9 +2480,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
         _jumpToBottomWhenSettled(maxExtent, attempts - 1);
       } else {
         // Final attempt — force jump to whatever the extent is now.
-        _scrollController.jumpTo(
-          _scrollController.position.maxScrollExtent,
-        );
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
         if (mounted) {
           setState(() {
             _isAtBottom = true;
@@ -1773,7 +2612,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_ensureColorEmoji(emoji), style: const TextStyle(fontSize: 16)),
+              Text(
+                _ensureColorEmoji(emoji),
+                style: const TextStyle(fontSize: 16),
+              ),
               const SizedBox(width: 2),
               Text(
                 '${users.length}',
@@ -1811,7 +2653,11 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     });
   }
 
-  void _showReactionPicker(BuildContext context, int messageId, Offset position) {
+  void _showReactionPicker(
+    BuildContext context,
+    int messageId,
+    Offset position,
+  ) {
     ReactionPicker.show(
       context: context,
       position: position,
@@ -1867,11 +2713,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
               ),
               Row(
                 children: const [
-                  Icon(
-                    Icons.tune_rounded,
-                    color: Color(0xFFB794F6),
-                    size: 18,
-                  ),
+                  Icon(Icons.tune_rounded, color: Color(0xFFB794F6), size: 18),
                   SizedBox(width: 8),
                   Text(
                     'Message Actions',
@@ -1890,15 +2732,22 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                   builder: (context, readingId, child) {
                     final isReadingThis = readingId == message['id'];
                     return _buildContextMenuActionTile(
-                      icon: isReadingThis ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
+                      icon: isReadingThis
+                          ? Icons.stop_circle_outlined
+                          : Icons.volume_up_outlined,
                       label: isReadingThis ? 'Stop Reading' : 'Read Aloud',
-                      iconColor: isReadingThis ? const Color(0xFFF87171) : const Color(0xFF60A5FA),
+                      iconColor: isReadingThis
+                          ? const Color(0xFFF87171)
+                          : const Color(0xFF60A5FA),
                       onTap: () {
                         // Don't close the menu, just start/stop
                         if (isReadingThis) {
                           TtsService().stop();
                         } else {
-                          TtsService().speak(message['id'] ?? '', message['content'] ?? '');
+                          TtsService().speak(
+                            message['id'] ?? '',
+                            message['content'] ?? '',
+                          );
                         }
                       },
                     );
@@ -2004,7 +2853,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
 
     final targetId = targetMessage['id'];
     if (targetId != null && targetId.isNotEmpty) {
-      final indexById = _messages.indexWhere((message) => message['id'] == targetId);
+      final indexById = _messages.indexWhere(
+        (message) => message['id'] == targetId,
+      );
       if (indexById != -1) {
         return indexById;
       }
@@ -2027,10 +2878,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     if (idx == -1) return;
 
     setState(() {
-      _messages[idx] = <String, String>{
-        ..._messages[idx],
-        'id': newId,
-      };
+      _messages[idx] = <String, String>{..._messages[idx], 'id': newId};
     });
   }
 
@@ -2108,7 +2956,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     });
   }
 
-  Future<void> _editMessage(Map<String, String> message, String newContent) async {
+  Future<void> _editMessage(
+    Map<String, String> message,
+    String newContent,
+  ) async {
     final index = _findMessageIndex(message);
     if (index == -1) {
       return;
@@ -2265,11 +3116,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     final spans = _parseMarkdownSpans(text);
     return RichText(
       text: TextSpan(
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 14,
-          height: 1.35,
-        ),
+        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.35),
         children: spans,
       ),
     );
@@ -2285,11 +3132,11 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     //  4) __underline__
     //  5) *italic* (single asterisk, but not inside **)
     final pattern = RegExp(
-      r'`([^`]+)`'                     // group 1: inline code
-      r'|\*\*(.+?)\*\*'               // group 2: bold
-      r'|~~(.+?)~~'                    // group 3: strikethrough
-      r'|__(.+?)__'                    // group 4: underline
-      r'|\*(.+?)\*',                   // group 5: italic
+      r'`([^`]+)`' // group 1: inline code
+      r'|\*\*(.+?)\*\*' // group 2: bold
+      r'|~~(.+?)~~' // group 3: strikethrough
+      r'|__(.+?)__' // group 4: underline
+      r'|\*(.+?)\*', // group 5: italic
     );
 
     final spans = <InlineSpan>[];
@@ -2303,39 +3150,49 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
 
       if (match.group(1) != null) {
         // Inline code
-        spans.add(TextSpan(
-          text: match.group(1),
-          style: TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 13,
-            backgroundColor: Colors.white.withValues(alpha: 0.12),
-            color: const Color(0xFF7DD3FC),
+        spans.add(
+          TextSpan(
+            text: match.group(1),
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              backgroundColor: Colors.white.withValues(alpha: 0.12),
+              color: const Color(0xFF7DD3FC),
+            ),
           ),
-        ));
+        );
       } else if (match.group(2) != null) {
         // Bold
-        spans.add(TextSpan(
-          text: match.group(2),
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ));
+        spans.add(
+          TextSpan(
+            text: match.group(2),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        );
       } else if (match.group(3) != null) {
         // Strikethrough
-        spans.add(TextSpan(
-          text: match.group(3),
-          style: const TextStyle(decoration: TextDecoration.lineThrough),
-        ));
+        spans.add(
+          TextSpan(
+            text: match.group(3),
+            style: const TextStyle(decoration: TextDecoration.lineThrough),
+          ),
+        );
       } else if (match.group(4) != null) {
         // Underline
-        spans.add(TextSpan(
-          text: match.group(4),
-          style: const TextStyle(decoration: TextDecoration.underline),
-        ));
+        spans.add(
+          TextSpan(
+            text: match.group(4),
+            style: const TextStyle(decoration: TextDecoration.underline),
+          ),
+        );
       } else if (match.group(5) != null) {
         // Italic
-        spans.add(TextSpan(
-          text: match.group(5),
-          style: const TextStyle(fontStyle: FontStyle.italic),
-        ));
+        spans.add(
+          TextSpan(
+            text: match.group(5),
+            style: const TextStyle(fontStyle: FontStyle.italic),
+          ),
+        );
       }
 
       lastEnd = match.end;
@@ -2360,7 +3217,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     final fullTimestamp = _formatTimestampFull(message['timestamp']);
     final messageId = _messageId(message);
     final hasReactions =
-        _messageReactions[messageId] != null && _messageReactions[messageId]!.isNotEmpty;
+        _messageReactions[messageId] != null &&
+        _messageReactions[messageId]!.isNotEmpty;
 
     return _AiMessageBubble(
       message: message,
@@ -2368,7 +3226,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
       buildBubbleContent: (LinkPreview? linkPreview) => Align(
         alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
         child: Column(
-          crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isUser
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Builder(
@@ -2378,14 +3238,17 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     GestureDetector(
-                      onLongPress: () => _showMessageContextMenu(message, isUser),
+                      onLongPress: () =>
+                          _showMessageContextMenu(message, isUser),
                       child: Container(
                         margin: EdgeInsets.only(bottom: hasReactions ? 2 : 12),
                         constraints: BoxConstraints(
                           maxWidth: MediaQuery.of(context).size.width * 0.70,
                         ),
                         decoration: BoxDecoration(
-                          color: isUser ? const Color(0xFF420796) : const Color(0xFF3944BC),
+                          color: isUser
+                              ? const Color(0xFF420796)
+                              : const Color(0xFF3944BC),
                           borderRadius: BorderRadius.only(
                             topLeft: const Radius.circular(16),
                             topRight: const Radius.circular(16),
@@ -2397,7 +3260,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
                               child: _buildFormattedContent(
                                 message['content'] ?? '',
                                 isUser: isUser,
@@ -2408,14 +3274,20 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                               _buildInlineLinkPreview(linkPreview, isUser),
                             if (isUser)
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 6,
+                                ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
                                     Text(
                                       timestamp,
-                                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11,
+                                      ),
                                     ),
                                     const SizedBox(width: 4),
                                     const Icon(
@@ -2428,7 +3300,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                               ),
                             if (_showTimestamps)
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 6,
+                                ),
                                 child: Text(
                                   fullTimestamp,
                                   style: const TextStyle(
@@ -2484,7 +3359,9 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     if (preview.isYouTube) {
       final uri = Uri.tryParse(preview.imageUrl ?? '');
       final segments = uri?.pathSegments ?? [];
-      final videoId = (segments.length >= 2 && segments[0] == 'vi') ? segments[1] : '';
+      final videoId = (segments.length >= 2 && segments[0] == 'vi')
+          ? segments[1]
+          : '';
       if (videoId.isEmpty) return const SizedBox.shrink();
 
       final watchUrl = 'https://www.youtube.com/watch?v=$videoId';
@@ -2496,7 +3373,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
           try {
             final u = Uri.parse(watchUrl);
             // ignore: deprecated_member_use
-            if (await canLaunchUrl(u)) await launchUrl(u, mode: LaunchMode.externalApplication);
+            if (await canLaunchUrl(u))
+              await launchUrl(u, mode: LaunchMode.externalApplication);
           } catch (_) {}
         },
         child: Column(
@@ -2514,7 +3392,8 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                     errorBuilder: (_, __, ___) => Image.network(
                       fallbackUrl,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(color: Colors.grey[850]),
+                      errorBuilder: (_, __, ___) =>
+                          Container(color: Colors.grey[850]),
                     ),
                   ),
                   Center(
@@ -2525,7 +3404,11 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                         color: Colors.black.withValues(alpha: 0.6),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.play_arrow, color: Colors.white, size: 30),
+                      child: const Icon(
+                        Icons.play_arrow,
+                        color: Colors.white,
+                        size: 30,
+                      ),
                     ),
                   ),
                 ],
@@ -2540,9 +3423,20 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                   const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.play_circle_fill, color: Color(0xFFFF0000), size: 12),
+                      Icon(
+                        Icons.play_circle_fill,
+                        color: Color(0xFFFF0000),
+                        size: 12,
+                      ),
                       SizedBox(width: 4),
-                      Text('YouTube', style: TextStyle(color: Color(0xFFFF0000), fontSize: 10, fontWeight: FontWeight.w700)),
+                      Text(
+                        'YouTube',
+                        style: TextStyle(
+                          color: Color(0xFFFF0000),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ],
                   ),
                   if (preview.title != null && preview.title!.isNotEmpty) ...[
@@ -2551,7 +3445,12 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                       preview.title!,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600, height: 1.3),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
                     ),
                   ],
                 ],
@@ -2563,13 +3462,16 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     }
 
     // General OG preview
-    final domain = (Uri.tryParse(preview.url)?.host ?? preview.url).replaceFirst('www.', '').toUpperCase();
+    final domain = (Uri.tryParse(preview.url)?.host ?? preview.url)
+        .replaceFirst('www.', '')
+        .toUpperCase();
     return GestureDetector(
       onTap: () async {
         try {
           final u = Uri.parse(preview.url);
           // ignore: deprecated_member_use
-          if (await canLaunchUrl(u)) await launchUrl(u, mode: LaunchMode.externalApplication);
+          if (await canLaunchUrl(u))
+            await launchUrl(u, mode: LaunchMode.externalApplication);
         } catch (_) {}
       },
       child: Column(
@@ -2595,19 +3497,54 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (preview.faviconUrl != null) ...[
-                      Image.network(preview.faviconUrl!, width: 12, height: 12, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                      Image.network(
+                        preview.faviconUrl!,
+                        width: 12,
+                        height: 12,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      ),
                       const SizedBox(width: 4),
                     ],
-                    Flexible(child: Text(domain, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFFa78bfa), fontSize: 10, fontWeight: FontWeight.w600))),
+                    Flexible(
+                      child: Text(
+                        domain,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFa78bfa),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
                 if (preview.title != null && preview.title!.isNotEmpty) ...[
                   const SizedBox(height: 3),
-                  Text(preview.title!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600, height: 1.35)),
+                  Text(
+                    preview.title!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
+                    ),
+                  ),
                 ],
-                if (preview.description != null && preview.description!.isNotEmpty) ...[
+                if (preview.description != null &&
+                    preview.description!.isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(preview.description!, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11, height: 1.4)),
+                  Text(
+                    preview.description!,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -2885,7 +3822,10 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                   const sendButtonReserve = 88.0;
                   final estimatedTextMaxWidth = math.max(
                     120.0,
-                    constraints.maxWidth - sendButtonReserve - iconSlotWidth - 28.0,
+                    constraints.maxWidth -
+                        sendButtonReserve -
+                        iconSlotWidth -
+                        28.0,
                   );
 
                   final isComposerExpanded = _isComposerMultiline(
@@ -2992,8 +3932,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                               vertical: 10,
                             ),
                             minimumSize: const Size(0, 0),
-                            tapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(20),
                             ),
@@ -3028,11 +3967,7 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
     );
   }
 
-  bool _isComposerMultiline(
-    String text,
-    TextStyle style,
-    double maxWidth,
-  ) {
+  bool _isComposerMultiline(String text, TextStyle style, double maxWidth) {
     if (text.isEmpty) return false;
 
     final painter = TextPainter(
@@ -3065,14 +4000,24 @@ class _AiChatScreenState extends State<AiChatScreen> with WidgetsBindingObserver
                 ),
                 borderRadius: BorderRadius.circular(18),
               ),
-              child: const Icon(Icons.smart_toy_rounded, color: Colors.white, size: 20),
+              child: const Icon(
+                Icons.smart_toy_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
             ),
             const SizedBox(width: 10),
             const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('AI Chat', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                Text('Always on', style: TextStyle(fontSize: 11, color: Color(0xFF00E676))),
+                Text(
+                  'AI Chat',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  'Always on',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF00E676)),
+                ),
               ],
             ),
           ],

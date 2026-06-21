@@ -5,27 +5,29 @@ import 'dart:async';
 /// Service for showing an ongoing call notification in the status bar
 /// Similar to Facebook Messenger / Skype behavior
 class CallNotificationService {
-  static final CallNotificationService _instance = CallNotificationService._internal();
+  static final CallNotificationService _instance =
+      CallNotificationService._internal();
   factory CallNotificationService() => _instance;
   CallNotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
-  
+  final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
+
   // Fixed notification ID for the ongoing call
   static const int _callNotificationId = 9999;
   static const String _channelId = 'ongoing_call';
   static const String _channelName = 'Ongoing Call';
-  
+
   // Call duration tracking
   Timer? _durationTimer;
   int _callDurationSeconds = 0;
   String? _remoteName;
   String? _callType;
   bool _isShowing = false;
-  
+
   // Callback for end call action from notification
   VoidCallback? onEndCallFromNotification;
-  
+
   bool get isShowing => _isShowing;
 
   /// Initialize the notification channel
@@ -42,18 +44,22 @@ class CallNotificationService {
     );
 
     await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(channel);
-    
+
     // Initialize with action handling
     const AndroidInitializationSettings androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings();
+    const DarwinInitializationSettings iosSettings =
+        DarwinInitializationSettings();
 
     const InitializationSettings settings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
+      macOS: iosSettings,
     );
 
     await _localNotifications.initialize(
@@ -95,7 +101,9 @@ class CallNotificationService {
       _updateNotification();
     });
 
-    debugPrint('📞 Ongoing call notification shown for $remoteName ($callType)');
+    debugPrint(
+      '📞 Ongoing call notification shown for $remoteName ($callType)',
+    );
   }
 
   /// Update the notification with current duration
@@ -107,29 +115,30 @@ class CallNotificationService {
     final title = '${isVideo ? 'Video' : 'Audio'} call with $_remoteName';
     final body = 'In progress · $duration';
 
-    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: 'Shows when a call is in progress',
-      importance: Importance.low,
-      priority: Priority.low,
-      ongoing: true, // Makes it persistent (can't swipe away)
-      autoCancel: false,
-      showWhen: false,
-      usesChronometer: true,
-      chronometerCountDown: false,
-      icon: '@mipmap/ic_launcher',
-      category: AndroidNotificationCategory.call,
-      visibility: NotificationVisibility.public,
-      actions: <AndroidNotificationAction>[
-        const AndroidNotificationAction(
-          'end_call',
-          'End Call',
-          showsUserInterface: true,
-          cancelNotification: true,
-        ),
-      ],
-    );
+    final AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          _channelId,
+          _channelName,
+          channelDescription: 'Shows when a call is in progress',
+          importance: Importance.low,
+          priority: Priority.low,
+          ongoing: true, // Makes it persistent (can't swipe away)
+          autoCancel: false,
+          showWhen: false,
+          usesChronometer: true,
+          chronometerCountDown: false,
+          icon: '@mipmap/ic_launcher',
+          category: AndroidNotificationCategory.call,
+          visibility: NotificationVisibility.public,
+          actions: <AndroidNotificationAction>[
+            const AndroidNotificationAction(
+              'end_call',
+              'End Call',
+              showsUserInterface: true,
+              cancelNotification: true,
+            ),
+          ],
+        );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: false,
@@ -154,22 +163,23 @@ class CallNotificationService {
   /// Update notification to show "Call Ended"
   Future<void> showCallEnded() async {
     _durationTimer?.cancel();
-    
+
     final duration = _formatDuration(_callDurationSeconds);
     final title = 'Call ended';
     final body = 'Duration: $duration';
 
-    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: 'Shows when a call is in progress',
-      importance: Importance.low,
-      priority: Priority.low,
-      ongoing: false, // Allow swipe to dismiss
-      autoCancel: true,
-      showWhen: true,
-      icon: '@mipmap/ic_launcher',
-    );
+    final AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          _channelId,
+          _channelName,
+          channelDescription: 'Shows when a call is in progress',
+          importance: Importance.low,
+          priority: Priority.low,
+          ongoing: false, // Allow swipe to dismiss
+          autoCancel: true,
+          showWhen: true,
+          icon: '@mipmap/ic_launcher',
+        );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -182,12 +192,7 @@ class CallNotificationService {
       iOS: iosDetails,
     );
 
-    await _localNotifications.show(
-      _callNotificationId,
-      title,
-      body,
-      details,
-    );
+    await _localNotifications.show(_callNotificationId, title, body, details);
 
     _isShowing = false;
 

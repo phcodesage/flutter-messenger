@@ -1,3 +1,4 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,7 +34,9 @@ const Map<String, String> _chatQuickReplyActionMap = <String, String>{
 Future<void> notificationTapBackgroundHandler(
   NotificationResponse response,
 ) async {
-  await FirebaseMessagingService.instance._processNotificationResponse(response);
+  await FirebaseMessagingService.instance._processNotificationResponse(
+    response,
+  );
 }
 
 bool _isChatQuickReplyEligible(Map<String, dynamic> data) {
@@ -108,9 +111,7 @@ String _appUpdateBody(Map<String, dynamic> data, bool isForced) {
     return releaseNotes;
   }
 
-  return isForced
-      ? 'This update is required.'
-      : 'Update now or update later.';
+  return isForced ? 'This update is required.' : 'Update now or update later.';
 }
 
 Future<void> _showAppUpdateNotification(
@@ -263,10 +264,7 @@ String? _resolveNotificationBody(Map<String, dynamic> data) {
   return _extractNotificationText(data)['body'];
 }
 
-StyleInformation? _buildMessagingStyle(
-  Map<String, dynamic> data,
-  String body,
-) {
+StyleInformation? _buildMessagingStyle(Map<String, dynamic> data, String body) {
   if (!_isConversationNotificationEligible(data)) {
     return null;
   }
@@ -281,12 +279,11 @@ StyleInformation? _buildMessagingStyle(
 
   return MessagingStyleInformation(
     Person(name: 'You'),
-    conversationTitle:
-        isGroup && groupName != null && groupName.isNotEmpty ? groupName : null,
+    conversationTitle: isGroup && groupName != null && groupName.isNotEmpty
+        ? groupName
+        : null,
     groupConversation: isGroup,
-    messages: <Message>[
-      Message(body, DateTime.now(), senderPerson),
-    ],
+    messages: <Message>[Message(body, DateTime.now(), senderPerson)],
   );
 }
 
@@ -349,7 +346,8 @@ Future<bool> _showNativeQuickReplyNotification({
         'groupName': data['group_name']?.toString(),
         'isGroup': isGroup,
         'replyEndpoint': _resolveQuickReplyEndpoint(data),
-        'replyRecipientId': data['reply_recipient_id']?.toString() ??
+        'replyRecipientId':
+            data['reply_recipient_id']?.toString() ??
             data['sender_id']?.toString(),
         'conversationType': conversationType ?? (isGroup ? 'group' : 'direct'),
         'enableQuickReply': _isChatQuickReplyEligible(data),
@@ -438,6 +436,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   const InitializationSettings settings = InitializationSettings(
     android: androidSettings,
     iOS: iosSettings,
+    macOS: iosSettings,
   );
 
   await localNotifications.initialize(
@@ -627,7 +626,21 @@ class FirebaseMessagingService {
   factory FirebaseMessagingService() => instance;
   FirebaseMessagingService._internal();
 
-  final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
+  // Lazily resolved so merely *constructing* this singleton never touches
+  // Firebase. `FirebaseMessaging.instance` throws `[core/no-app]` when no
+  // Firebase app is initialized (e.g. macOS desktop, where the placeholder
+  // firebase_options fail to init). Eagerly initializing this field as before
+  // made every access to FirebaseMessagingService.instance throw synchronously,
+  // which aborted callers mid-flow (e.g. ChatScreen._initialize → no messages).
+  FirebaseMessaging? _firebaseMessagingCache;
+  FirebaseMessaging get _firebaseMessaging =>
+      _firebaseMessagingCache ??= FirebaseMessaging.instance;
+
+  /// True only when a Firebase app has actually been initialized. On platforms
+  /// without Firebase configured this is false and all FCM operations are
+  /// skipped instead of throwing.
+  bool get _firebaseReady => Firebase.apps.isNotEmpty;
+
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
   bool _localNotificationsInitialized = false;
@@ -640,6 +653,13 @@ class FirebaseMessagingService {
 
   /// Initialize Firebase Messaging and request permissions
   Future<void> initialize() async {
+    if (!_firebaseReady) {
+      debugPrint(
+        'ℹ️ Firebase not initialized — skipping FCM setup (push notifications '
+        'unavailable on this platform).',
+      );
+      return;
+    }
     try {
       // Request permission for notifications
       NotificationSettings settings = await _firebaseMessaging
@@ -756,6 +776,7 @@ class FirebaseMessagingService {
     const InitializationSettings settings = InitializationSettings(
       android: androidSettings,
       iOS: iosSettings,
+      macOS: iosSettings,
     );
 
     await _localNotifications.initialize(
@@ -1061,7 +1082,9 @@ class FirebaseMessagingService {
     _processNotificationResponse(response);
   }
 
-  Future<void> _processNotificationResponse(NotificationResponse response) async {
+  Future<void> _processNotificationResponse(
+    NotificationResponse response,
+  ) async {
     final payload = response.payload;
     if (payload == null) {
       return;
@@ -1090,8 +1113,16 @@ class FirebaseMessagingService {
     Map<String, dynamic> data,
     String? actionId,
   ) async {
-    final updateNowActionId = _readActionId(data, 'action_update_now', 'update_now');
-    final updateLaterActionId = _readActionId(data, 'action_update_later', 'update_later');
+    final updateNowActionId = _readActionId(
+      data,
+      'action_update_now',
+      'update_now',
+    );
+    final updateLaterActionId = _readActionId(
+      data,
+      'action_update_later',
+      'update_later',
+    );
 
     final normalizedAction = actionId?.trim();
 
@@ -1119,7 +1150,9 @@ class FirebaseMessagingService {
           return;
         }
       } catch (e) {
-        debugPrint('[FCM] Failed to start background download from notification: $e');
+        debugPrint(
+          '[FCM] Failed to start background download from notification: $e',
+        );
       }
       // Fallback: open the update dialog via nav
       _handleNotificationTap(data);
@@ -1169,13 +1202,16 @@ class FirebaseMessagingService {
     };
 
     try {
-      final conversationType =
-          data['conversation_type']?.toString().toLowerCase();
+      final conversationType = data['conversation_type']
+          ?.toString()
+          .toLowerCase();
       final groupId = int.tryParse(data['group_id']?.toString() ?? '');
       final endpoint = _resolveQuickReplyEndpoint(data);
       final uri = _buildQuickReplyUri(endpoint);
       final isGroup =
-          conversationType == 'group' || groupId != null || endpoint.contains('/groups/');
+          conversationType == 'group' ||
+          groupId != null ||
+          endpoint.contains('/groups/');
 
       final body = <String, dynamic>{'content': trimmedReply};
       if (!isGroup) {
@@ -1185,7 +1221,9 @@ class FirebaseMessagingService {
               '',
         );
         if (recipientId == null) {
-          debugPrint('❌ Quick reply payload missing reply_recipient_id/sender_id');
+          debugPrint(
+            '❌ Quick reply payload missing reply_recipient_id/sender_id',
+          );
           return false;
         }
         body['recipient_id'] = recipientId;
@@ -1247,6 +1285,10 @@ class FirebaseMessagingService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('fcm_token');
+      if (!_firebaseReady) {
+        _fcmToken = null;
+        return;
+      }
       await _firebaseMessaging.deleteToken();
       _fcmToken = null;
       debugPrint('✅ FCM token cleared');
@@ -1258,6 +1300,7 @@ class FirebaseMessagingService {
   /// Check if app was opened from a terminated state via notification
   /// Call this after the navigator is ready (e.g., after login/auth check)
   Future<void> checkInitialMessage() async {
+    if (!_firebaseReady) return;
     try {
       // First check FCM initial message
       RemoteMessage? initialMessage = await _firebaseMessaging
@@ -1346,9 +1389,7 @@ class FirebaseMessagingService {
           final nativePayload = await _nativeNotificationPayloadChannel
               .invokeMethod<String?>('consumeInitialNotificationPayload');
           if (nativePayload != null) {
-            debugPrint(
-              '🔔 App opened from native Android chat notification',
-            );
+            debugPrint('🔔 App opened from native Android chat notification');
             final data = jsonDecode(nativePayload) as Map<String, dynamic>;
             _storePendingForLobby(data);
             return;
@@ -1369,7 +1410,9 @@ class FirebaseMessagingService {
   /// navigate immediately because the auth flow will pushReplacement and
   /// destroy any route we push now.
   void _storePendingForLobby(Map<String, dynamic> data) {
-    debugPrint('📌 Storing terminated-state notification as pending for LobbyScreen');
+    debugPrint(
+      '📌 Storing terminated-state notification as pending for LobbyScreen',
+    );
     NotificationHandler.storePendingNotification(data);
   }
 }

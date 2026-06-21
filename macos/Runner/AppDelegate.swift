@@ -10,9 +10,20 @@ class AppDelegate: FlutterAppDelegate {
 
     configureFileOpsChannelIfNeeded()
 
+    // Bring the app and its window to the foreground and give it keyboard focus
+    // on launch. Without this the window can open behind other apps (flutter run
+    // logs "Failed to foreground app"); the focus change when the user then
+    // clicks the window desyncs Flutter's HardwareKeyboard state, which triggers
+    // the "physical key is already pressed" assertion loop and blocks all text
+    // input on macOS.
+    NSApp.activate(ignoringOtherApps: true)
+    mainFlutterWindow?.makeKeyAndOrderFront(nil)
+
     // Some app launches initialize the window/controller one runloop later.
     DispatchQueue.main.async { [weak self] in
       self?.configureFileOpsChannelIfNeeded()
+      NSApp.activate(ignoringOtherApps: true)
+      self?.mainFlutterWindow?.makeKeyAndOrderFront(nil)
     }
   }
 

@@ -149,20 +149,61 @@ class _CallSetupModalState extends State<CallSetupModal> {
       // Stop existing stream
       await _stopMediaStream();
 
-      final Map<String, dynamic> constraints = {
-        'audio': _selectedMicId != null ? {'deviceId': _selectedMicId} : true,
-        'video': _videoEnabled && _selectedCameraId != null
-            ? {
-                'deviceId': _selectedCameraId,
-                'width': {'ideal': 1280},
-                'height': {'ideal': 720},
-                'frameRate': {'ideal': 30, 'max': 30},
-                'facingMode': 'user',
-              }
-            : _videoEnabled,
-      };
+      final dynamic audioConstraint =
+          _selectedMicId != null ? {'deviceId': _selectedMicId} : true;
 
-      _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      // Don't combine an exact `deviceId` with `facingMode` — that pair is
+      // over-constrained on many Android devices and makes getUserMedia throw,
+      // which previously left the call with no stream (video call "not working"
+      // while audio-only calls were fine).
+      final Map<String, dynamic> videoConstraint = _selectedCameraId != null
+          ? {
+              'deviceId': _selectedCameraId,
+              'width': {'ideal': 1280},
+              'height': {'ideal': 720},
+              'frameRate': {'ideal': 30, 'max': 30},
+            }
+          : {
+              'facingMode': 'user',
+              'width': {'ideal': 1280},
+              'height': {'ideal': 720},
+            };
+
+      MediaStream? stream;
+      if (_videoEnabled) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            'audio': audioConstraint,
+            'video': videoConstraint,
+          });
+        } catch (e) {
+          debugPrint('⚠️ Video getUserMedia failed ($e) — retrying with relaxed constraints');
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              'audio': audioConstraint,
+              'video': true,
+            });
+          } catch (e2) {
+            debugPrint('⚠️ Video unavailable ($e2) — falling back to audio-only');
+            stream = await navigator.mediaDevices.getUserMedia({
+              'audio': audioConstraint,
+              'video': false,
+            });
+            if (mounted) {
+              setState(() => _videoEnabled = false);
+            } else {
+              _videoEnabled = false;
+            }
+          }
+        }
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          'audio': audioConstraint,
+          'video': false,
+        });
+      }
+
+      _localStream = stream;
 
       if (_videoEnabled && _localStream != null) {
         _localRenderer.srcObject = _localStream;
