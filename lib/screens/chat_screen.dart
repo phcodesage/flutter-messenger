@@ -11755,6 +11755,21 @@ class _ChatScreenState extends State<ChatScreen>
     return message.messageType == 'text' && !message.isDeleted;
   }
 
+  /// Whether a message can be marked as a task. Mirrors web behaviour: any real
+  /// message (text, image, video, file, voice, contact) can become a task, but
+  /// system / call / doorbell / colour-change events cannot.
+  bool _canMarkAsTask(Message message) {
+    if (message.isDeleted) return false;
+    const blocked = {
+      'system',
+      'call',
+      'doorbell',
+      'color_change',
+      'color_reset',
+    };
+    return !blocked.contains(message.messageType);
+  }
+
   bool _isExcalidrawMessage(Message message) {
     if (message.isDeleted) return false;
     return _extractExcalidrawUrl(message.content) != null;
@@ -12085,7 +12100,7 @@ class _ChatScreenState extends State<ChatScreen>
                     );
                   },
                 ),
-              if (message.messageType == 'text' && !message.isDeleted)
+              if (_canMarkAsTask(message))
                 _buildContextMenuActionTile(
                   icon: message.isTask
                       ? Icons.check_circle
@@ -12252,15 +12267,19 @@ class _ChatScreenState extends State<ChatScreen>
 
     // Optimistically update the message locally
     setState(() {
+      final updated = _copyMessageWithTaskState(
+        message,
+        isTask: true,
+        taskCreatedAt: DateTime.now().toIso8601String(),
+        taskCompletedAt: null,
+      );
       final index = _messages.indexWhere((m) => m.id == message.id);
       if (index != -1) {
-        _messages[index] = _copyMessageWithTaskState(
-          message,
-          isTask: true,
-          taskCreatedAt: DateTime.now().toIso8601String(),
-          taskCompletedAt: null,
-        );
+        _messages[index] = updated;
       }
+      // Surface in the tasks modal immediately; the socket echo (task_added)
+      // upserts the same entry, so this stays idempotent.
+      _upsertTaskMessage(updated);
     });
     _taskBadgeAnimController.forward(from: 0);
     _notifyTaskModalChanged();
@@ -14051,6 +14070,20 @@ class _ChatScreenState extends State<ChatScreen>
     final accent = accentColors[(taskNumber - 1) % accentColors.length];
     final labelColor = isCompleted ? const Color(0xFF22C55E) : accent;
 
+    // Image tasks show a thumbnail so the task is visually identifiable.
+    final bool isImageTask =
+        task.messageType == 'image' ||
+        (task.fileType?.startsWith('image/') ?? false);
+    final String? thumbUrl = (task.fileUrl != null && task.fileUrl!.isNotEmpty)
+        ? (task.fileUrl!.startsWith('http')
+              ? task.fileUrl!
+              : '${ApiConfig.baseUrl}${task.fileUrl!}')
+        : null;
+    final bool showThumb = isImageTask && thumbUrl != null;
+    final String contentLabel = task.content.isNotEmpty
+        ? task.content
+        : (task.fileName ?? (isImageTask ? 'Image' : 'File'));
+
     return GestureDetector(
       onTap: () => _showTaskDetail(task, isCompleted),
       child: AnimatedContainer(
@@ -14096,7 +14129,7 @@ class _ChatScreenState extends State<ChatScreen>
                       const Spacer(),
                       InkWell(
                         onTap: () {
-                          Clipboard.setData(ClipboardData(text: task.content));
+                          Clipboard.setData(ClipboardData(text: contentLabel));
                           _showTopSnackBar(
                             const SnackBar(
                               content: Text('Copied to clipboard'),
@@ -14163,21 +14196,66 @@ class _ChatScreenState extends State<ChatScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(
-                                child: Text(
-                                  task.content,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    decoration: isCompleted
-                                        ? TextDecoration.lineThrough
-                                        : null,
-                                    decorationColor: Colors.grey[600],
-                                    height: 1.3,
-                                  ),
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                child: showThumb
+                                    ? Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: Image.network(
+                                                thumbUrl,
+                                                fit: BoxFit.cover,
+                                                width: double.infinity,
+                                                errorBuilder: (_, __, ___) =>
+                                                    Container(
+                                                      color: const Color(
+                                                        0xFF1E1E2E,
+                                                      ),
+                                                      alignment:
+                                                          Alignment.center,
+                                                      child: Icon(
+                                                        Icons.broken_image,
+                                                        color: Colors.grey[600],
+                                                        size: 20,
+                                                      ),
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Text(
+                                            contentLabel,
+                                            style: TextStyle(
+                                              color: Colors.grey[300],
+                                              fontSize: 10,
+                                              decoration: isCompleted
+                                                  ? TextDecoration.lineThrough
+                                                  : null,
+                                              decorationColor: Colors.grey[600],
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      )
+                                    : Text(
+                                        contentLabel,
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          decoration: isCompleted
+                                              ? TextDecoration.lineThrough
+                                              : null,
+                                          decorationColor: Colors.grey[600],
+                                          height: 1.3,
+                                        ),
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                               ),
                               const SizedBox(height: 2),
                               Text(
