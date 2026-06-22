@@ -71,6 +71,12 @@ class CallService {
   Function(String message)? onDataChannelMessage;
   Function(DateTime? connectedAt)? onConnectedAtChanged;
 
+  // Keepalive heartbeat: while a call is connected we emit `call_keepalive`
+  // every ~10s so the backend can expire calls that die without a hangup and
+  // stop the cross-device "in call on another device" indicator from sticking.
+  Timer? _keepaliveTimer;
+  static const Duration _keepaliveInterval = Duration(seconds: 10);
+
   // ICE servers
   List<Map<String, dynamic>> _iceServers = [];
 
@@ -457,6 +463,15 @@ class CallService {
 
   /// Create WebRTC peer connection
   Future<void> _createPeerConnection() async {
+    // The first call after launch can race the one-shot ICE fetch in
+    // initialize(). Without it we'd build the PC with STUN only (no TURN relay),
+    // so the call fails on restrictive NATs and only "works on retry" once the
+    // servers are cached. Make sure they're loaded before we create the PC.
+    if (_iceServers.isEmpty) {
+      debugPrint('🔧 ICE servers not loaded yet — fetching before peer connection');
+      await _fetchIceServers();
+    }
+
     final config = {
       'iceServers': _iceServers.isNotEmpty
           ? _iceServers
@@ -500,6 +515,7 @@ class CallService {
             source: 'ice-connected-fallback',
           );
         }
+        _startKeepalive();
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         debugPrint('❌ ICE connection failed — ending call');
         _callState = CallState.failed;
@@ -1243,6 +1259,36 @@ class CallService {
     _cleanup();
   }
 
+  /// Start emitting the call_keepalive heartbeat for the active call room.
+  void _startKeepalive() {
+    _keepaliveTimer?.cancel();
+    final room = _callRoomId;
+    if (room == null || room.isEmpty) return;
+
+    // Beat once immediately so the backend learns this call supports keepalive.
+    _socketService.emit('call_keepalive', {'room': room});
+
+    _keepaliveTimer = Timer.periodic(_keepaliveInterval, (_) {
+      final activeRoom = _callRoomId;
+      if (activeRoom == null || activeRoom.isEmpty) {
+        _stopKeepalive();
+        return;
+      }
+      if (_callState != CallState.connected) return;
+      _socketService.emit('call_keepalive', {'room': activeRoom});
+    });
+    debugPrint('💓 Call keepalive started for room: $room');
+  }
+
+  /// Stop the call_keepalive heartbeat.
+  void _stopKeepalive() {
+    if (_keepaliveTimer != null) {
+      _keepaliveTimer!.cancel();
+      _keepaliveTimer = null;
+      debugPrint('💓 Call keepalive stopped');
+    }
+  }
+
   /// End the current call
   void endCall() {
     debugPrint('📴 Ending call - callId: $_callId, callRoomId: $_callRoomId');
@@ -1307,6 +1353,8 @@ class CallService {
   void _cleanup() {
     debugPrint('🧹 Cleaning up call resources');
 
+    _stopKeepalive();
+
     _socketService.removeListener(
       'screenShareStarted',
       _screenShareListenerKey,
@@ -1361,6 +1409,8 @@ class CallService {
   /// Call this when the call UI is being completely closed
   void fullCleanup() {
     debugPrint('🧹 Full cleanup - stopping all tracks and disposing streams');
+
+    _stopKeepalive();
 
     _socketService.removeListener(
       'screenShareStarted',
