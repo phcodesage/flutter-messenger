@@ -226,6 +226,11 @@ class _ChatScreenState extends State<ChatScreen>
   bool _isSwitchingInputMode = false;
   double _lockedInputPanelHeight = 0;
   Timer? _inputModeSwitchTimer;
+  // True while switching from the emoji panel back to the keyboard: the bottom
+  // inset is held constant (composer/list don't move) and the emoji grid stays
+  // visible until the keyboard has risen to the held height.
+  bool _emojiKeyboardSwitching = false;
+  Timer? _emojiSwitchTimer;
   double _lastKnownKeyboardInset = 0;
   // App-wide cache of the keyboard height so the FIRST open in a freshly opened
   // chat can snap instantly too (per-screen state resets, this doesn't).
@@ -647,6 +652,19 @@ class _ChatScreenState extends State<ChatScreen>
     // height is driven separately, so don't react to the inset here.
     if (_showEmojiPicker) return;
 
+    // Switching emoji → keyboard: hold the inset constant (composer/list stay
+    // put, emoji grid stays visible) until the keyboard has risen to roughly the
+    // held height, then release and follow it. This keeps the swap jump-free.
+    if (_emojiKeyboardSwitching) {
+      if (viewInsetBottom >= _keyboardInsetNotifier.value - 24) {
+        _emojiSwitchTimer?.cancel();
+        _emojiKeyboardSwitching = false;
+        _setKeyboardInset(viewInsetBottom);
+        if (mounted) setState(() {}); // hide the emoji overlay
+      }
+      return;
+    }
+
     // Track the keyboard frame-by-frame (on Android 11+ viewInsets is already
     // synced to the IME animation). We do NOT relayout the screen: the message
     // list keeps its size and only the composer translates + the list scrolls,
@@ -711,6 +729,16 @@ class _ChatScreenState extends State<ChatScreen>
   double _emojiPanelHeight(double keyboardInset) {
     final target = keyboardInset > 0 ? keyboardInset : _lastKnownKeyboardInset;
     return target <= 0 ? 300 : target.clamp(260, 420).toDouble();
+  }
+
+  /// Stable emoji-panel content height. Single source of truth shared by the
+  /// composer's translate (so it lifts over the grid) and the bottom overlay
+  /// that actually renders the grid, so the two can never drift.
+  double _currentEmojiPanelHeight() {
+    if (_isSwitchingInputMode && _lockedInputPanelHeight > 0) {
+      return _lockedInputPanelHeight;
+    }
+    return _emojiPanelHeight(_effectiveKeyboardInset());
   }
 
   void _startInputModeLock(double panelHeight) {
@@ -9853,6 +9881,13 @@ class _ChatScreenState extends State<ChatScreen>
       _inputFocusNode.requestFocus();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        // The field kept focus while the emoji panel was open, so requestFocus
+        // alone won't re-open the IME (it was explicitly hidden via
+        // TextInput.hide). Force the keyboard to show again.
+        _inputFocusNode.requestFocus();
+        try {
+          SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+        } catch (_) {}
         _restoreSavedInputSelection();
       });
     } else {
@@ -10814,6 +10849,27 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   /// Build inline emoji picker widget with category tabs
+  /// Emoji grid rendered as a bottom OVERLAY (in the outer Stack) so it never
+  /// resizes the message list. Its total height equals the composer's emoji
+  /// translate (grid height + bottom safe area), so the lifted composer's
+  /// bottom edge meets this overlay's top edge with no gap or overlap.
+  Widget _buildEmojiPanelOverlay(BuildContext context) {
+    final panelHeight = _currentEmojiPanelHeight();
+    final bottomSafe = MediaQuery.of(context).padding.bottom;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: Material(
+        color: _headerColor,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: bottomSafe),
+          child: _buildInlineEmojiPicker(panelHeight),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInlineEmojiPicker(double panelHeight) {
     final category = _emojiCategories[_emojiCategoryIndex];
     final emojis = _normalizedEmojiList(category['emojis'] as List<String>);
@@ -11227,360 +11283,386 @@ class _ChatScreenState extends State<ChatScreen>
     // only inside the bottom composer's ValueListenableBuilder (keyed on
     // _keyboardInsetNotifier) so the keyboard animation slides the composer
     // without rebuilding the message list.
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      backgroundColor: const Color(0xFF2C2C2C),
-      appBar: ChatHeader(
-        otherUser: widget.otherUser,
-        // Fixed violet header to match the web (bg-violet-900), independent of
-        // the chat color-change feature (which still themes the composer below).
-        headerColor: const Color(0xFF4C1D95),
-        isSelfChat: _isSelfChat,
-        callInProgressOnOtherDevice: _callInProgressOnOtherDevice,
-        partnerStatus: _getEffectivePartnerStatus(),
-        partnerLastSeen: _formattedPartnerLastSeen(),
-        taskCount: _taskMessages.where((m) => m.isTask).length,
-        excalidrawCount: _pinnedExcalidrawLinks.length,
-        scale: scale,
-        onBack: widget.embedded ? null : () => Navigator.pop(context),
-        onUserProfile: _showUserProfile,
-        onShowTasks: _showTasksModal,
-        onShowExcalidraw: _showExcalidrawModal,
-        onCallAudio: () => _showCallSetupModal(CallType.audio),
-        onCallVideo: () => _showCallSetupModal(CallType.video),
-      ),
-      body: GestureDetector(
-        // Tap outside the modal to dismiss it
-        behavior: HitTestBehavior.translucent,
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                LiveChatTimestampHeader(scale: scale),
-                // Messages list
-                Expanded(
-                  child: Stack(
-                    children: [
-                      ChatMessageList(
-                        scale: scale,
-                        controller: _scrollController,
-                        isLoading: _isLoading,
-                        messages: _messages,
-                        hasMoreMessages: _hasMoreMessages,
-                        isLoadingMore: _isLoadingMore,
-                        onLoadMoreMessages: _loadMoreMessages,
-                        // Reactive bottom spacer rides the keyboard so the newest
-                        // message lifts above the overlaying composer without the
-                        // list ever resizing/rebuilding.
-                        bottomSpacer: _keyboardInsetNotifier,
-                        loadingWidgetBuilder: (_) =>
-                            _buildChatLoadingPlaceholder(),
-                        itemBuilder: (context, index) {
-                          // "Load more" button is handled inside ChatMessageList.
-                          final message = _messages[index];
+    return PopScope(
+      // System Back should close the emoji panel / keyboard first, not leave the
+      // room. (The header back arrow uses Navigator.pop directly, which bypasses
+      // PopScope, so it still leaves immediately.)
+      canPop: !(_showEmojiPicker || _isKeyboardVisible),
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_showEmojiPicker) {
+          setState(() => _showEmojiPicker = false);
+          _inputFocusNode.unfocus();
+        } else if (_isKeyboardVisible) {
+          _inputFocusNode.unfocus();
+        }
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        backgroundColor: const Color(0xFF2C2C2C),
+        appBar: ChatHeader(
+          otherUser: widget.otherUser,
+          // Fixed violet header to match the web (bg-violet-900), independent of
+          // the chat color-change feature (which still themes the composer below).
+          headerColor: const Color(0xFF4C1D95),
+          isSelfChat: _isSelfChat,
+          callInProgressOnOtherDevice: _callInProgressOnOtherDevice,
+          partnerStatus: _getEffectivePartnerStatus(),
+          partnerLastSeen: _formattedPartnerLastSeen(),
+          taskCount: _taskMessages.where((m) => m.isTask).length,
+          excalidrawCount: _pinnedExcalidrawLinks.length,
+          scale: scale,
+          onBack: widget.embedded ? null : () => Navigator.pop(context),
+          onUserProfile: _showUserProfile,
+          onShowTasks: _showTasksModal,
+          onShowExcalidraw: _showExcalidrawModal,
+          onCallAudio: () => _showCallSetupModal(CallType.audio),
+          onCallVideo: () => _showCallSetupModal(CallType.video),
+        ),
+        body: GestureDetector(
+          // Tap outside the modal to dismiss it
+          behavior: HitTestBehavior.translucent,
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  LiveChatTimestampHeader(scale: scale),
+                  // Messages list
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        ChatMessageList(
+                          scale: scale,
+                          controller: _scrollController,
+                          isLoading: _isLoading,
+                          messages: _messages,
+                          hasMoreMessages: _hasMoreMessages,
+                          isLoadingMore: _isLoadingMore,
+                          onLoadMoreMessages: _loadMoreMessages,
+                          // Reactive bottom spacer rides the keyboard so the newest
+                          // message lifts above the overlaying composer without the
+                          // list ever resizing/rebuilding.
+                          bottomSpacer: _keyboardInsetNotifier,
+                          loadingWidgetBuilder: (_) =>
+                              _buildChatLoadingPlaceholder(),
+                          itemBuilder: (context, index) {
+                            // "Load more" button is handled inside ChatMessageList.
+                            final message = _messages[index];
 
-                          if (message.isDeleted) {
-                            return const SizedBox.shrink();
-                          }
+                            if (message.isDeleted) {
+                              return const SizedBox.shrink();
+                            }
 
-                          final isSentByMe = message.senderId == _currentUserId;
-                          Widget? dateSeparator;
-                          if (index < _messages.length - 1) {
-                            final nextMessage = _messages[index + 1];
-                            if (!_isSameDay(
-                              message.timestamp,
-                              nextMessage.timestamp,
-                            )) {
+                            final isSentByMe =
+                                message.senderId == _currentUserId;
+                            Widget? dateSeparator;
+                            if (index < _messages.length - 1) {
+                              final nextMessage = _messages[index + 1];
+                              if (!_isSameDay(
+                                message.timestamp,
+                                nextMessage.timestamp,
+                              )) {
+                                dateSeparator = ChatDateSeparator(
+                                  timestamp: message.timestamp,
+                                  scale: scale,
+                                );
+                              }
+                            } else {
                               dateSeparator = ChatDateSeparator(
                                 timestamp: message.timestamp,
                                 scale: scale,
                               );
                             }
-                          } else {
-                            dateSeparator = ChatDateSeparator(
-                              timestamp: message.timestamp,
-                              scale: scale,
-                            );
-                          }
 
-                          final Widget msgContent =
-                              message.messageType == 'system'
-                              ? Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 6,
-                                  ),
-                                  child: Center(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 5,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.08,
-                                        ),
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Text(
-                                        message.content,
-                                        style: TextStyle(
-                                          color: Colors.grey[400],
-                                          fontSize: 12,
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                      ),
+                            final Widget msgContent =
+                                message.messageType == 'system'
+                                ? Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
                                     ),
-                                  ),
-                                )
-                              : SwipeableMessage(
-                                  isSentByMe: isSentByMe,
-                                  onReply: () => _setReplyTo(message),
-                                  child: _buildMessageBubble(
-                                    message,
-                                    isSentByMe,
-                                  ),
-                                );
-
-                          return ChatMessageItem(
-                            messageKey: _messageItemKeys.putIfAbsent(
-                              message.id,
-                              () => GlobalKey(),
-                            ),
-                            dateSeparator: dateSeparator,
-                            content: msgContent,
-                          );
-                        },
-                        emptyStateBuilder: (context) => Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.chat_bubble_outline,
-                                size: 64 * scale,
-                                color: Colors.grey[700],
-                              ),
-                              SizedBox(height: 16 * scale),
-                              Text(
-                                'No messages yet',
-                                style: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontSize: 16 * scale,
-                                ),
-                              ),
-                              SizedBox(height: 8 * scale),
-                              Text(
-                                'Send a message to start the conversation',
-                                style: TextStyle(
-                                  color: Colors.grey[700],
-                                  fontSize: 14 * scale,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      if (!_isAtBottom)
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 16,
-                          // Ride above the composer when the keyboard is up so
-                          // the button isn't hidden behind the overlay. Only the
-                          // translate rebuilds on inset change, not the button.
-                          child: ValueListenableBuilder<double>(
-                            valueListenable: _keyboardInsetNotifier,
-                            builder: (context, inset, child) =>
-                                Transform.translate(
-                                  offset: Offset(0, -inset),
-                                  child: child,
-                                ),
-                            child: Center(
-                              child: GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _unreadCount = 0;
-                                  });
-                                  _scrollToBottom();
-                                  _markVisibleMessagesAsRead();
-                                },
-                                child: Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF7C3AED),
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: 0.3,
+                                    child: Center(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 14,
+                                          vertical: 5,
                                         ),
-                                        blurRadius: 6,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      const Icon(
-                                        Icons.keyboard_arrow_down,
-                                        color: Colors.white,
-                                        size: 20,
-                                      ),
-                                      if (_unreadCount > 0)
-                                        Positioned(
-                                          top: -2,
-                                          right: -2,
-                                          child: Container(
-                                            padding: const EdgeInsets.all(3),
-                                            decoration: const BoxDecoration(
-                                              color: Colors.red,
-                                              shape: BoxShape.circle,
-                                            ),
-                                            constraints: const BoxConstraints(
-                                              minWidth: 14,
-                                              minHeight: 14,
-                                            ),
-                                            child: Text(
-                                              _unreadCount > 99
-                                                  ? '99+'
-                                                  : _unreadCount.toString(),
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 8,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              textAlign: TextAlign.center,
-                                            ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.08,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            20,
                                           ),
                                         ),
-                                    ],
+                                        child: Text(
+                                          message.content,
+                                          style: TextStyle(
+                                            color: Colors.grey[400],
+                                            fontSize: 12,
+                                            fontStyle: FontStyle.italic,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : SwipeableMessage(
+                                    isSentByMe: isSentByMe,
+                                    onReply: () => _setReplyTo(message),
+                                    child: _buildMessageBubble(
+                                      message,
+                                      isSentByMe,
+                                    ),
+                                  );
+
+                            return ChatMessageItem(
+                              messageKey: _messageItemKeys.putIfAbsent(
+                                message.id,
+                                () => GlobalKey(),
+                              ),
+                              dateSeparator: dateSeparator,
+                              content: msgContent,
+                            );
+                          },
+                          emptyStateBuilder: (context) => Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline,
+                                  size: 64 * scale,
+                                  color: Colors.grey[700],
+                                ),
+                                SizedBox(height: 16 * scale),
+                                Text(
+                                  'No messages yet',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 16 * scale,
+                                  ),
+                                ),
+                                SizedBox(height: 8 * scale),
+                                Text(
+                                  'Send a message to start the conversation',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontSize: 14 * scale,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (!_isAtBottom)
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 16,
+                            // Ride above the composer when the keyboard is up so
+                            // the button isn't hidden behind the overlay. Only the
+                            // translate rebuilds on inset change, not the button.
+                            child: ValueListenableBuilder<double>(
+                              valueListenable: _keyboardInsetNotifier,
+                              builder: (context, inset, child) =>
+                                  Transform.translate(
+                                    offset: Offset(0, -inset),
+                                    child: child,
+                                  ),
+                              child: Center(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _unreadCount = 0;
+                                    });
+                                    _scrollToBottom();
+                                    _markVisibleMessagesAsRead();
+                                  },
+                                  child: Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF7C3AED),
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.3,
+                                          ),
+                                          blurRadius: 6,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        const Icon(
+                                          Icons.keyboard_arrow_down,
+                                          color: Colors.white,
+                                          size: 20,
+                                        ),
+                                        if (_unreadCount > 0)
+                                          Positioned(
+                                            top: -2,
+                                            right: -2,
+                                            child: Container(
+                                              padding: const EdgeInsets.all(3),
+                                              decoration: const BoxDecoration(
+                                                color: Colors.red,
+                                                shape: BoxShape.circle,
+                                              ),
+                                              constraints: const BoxConstraints(
+                                                minWidth: 14,
+                                                minHeight: 14,
+                                              ),
+                                              child: Text(
+                                                _unreadCount > 99
+                                                    ? '99+'
+                                                    : _unreadCount.toString(),
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 8,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                                textAlign: TextAlign.center,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                // Bottom bar: typing preview + message input (keyed for modal
-                // positioning). Only this composer subtree rebuilds as the
-                // keyboard slides — the message list above stays untouched.
-                ValueListenableBuilder<double>(
-                  valueListenable: _keyboardInsetNotifier,
-                  builder: (context, _, __) {
-                    final keyboardInset = _effectiveKeyboardInset();
-                    final emojiPanelHeight = _emojiPanelHeight(keyboardInset);
-                    // Emoji-panel content height (only used when the picker shows).
-                    final stablePanelHeight =
-                        _isSwitchingInputMode && _lockedInputPanelHeight > 0
-                        ? _lockedInputPanelHeight
-                        : emojiPanelHeight;
-                    final actionPanelInset =
-                        (_isActionsPanelOpen && _actionsPanelFromKeyboard)
-                        ? _actionsPanelInset
-                        : 0.0;
-                    // The keyboard is handled as an OVERLAY: we translate the
-                    // composer up over the (un-resized) message list instead of
-                    // reserving layout space for it, so the list never relayouts.
-                    // composerInset only reserves real space for the emoji /
-                    // actions panels, which replace the keyboard.
-                    final composerInset = _showEmojiPicker
-                        ? 0.0
-                        : actionPanelInset;
-                    final translateY = _showEmojiPicker ? 0.0 : keyboardInset;
-                    return Transform.translate(
-                      offset: Offset(0, -translateY),
-                      child: Column(
-                        key: _bottomBarKey,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Typing preview - pinned at bottom, always visible
-                          Container(
-                            height:
-                                (_otherUserTyping && _typingPreview.isNotEmpty)
-                                ? null
-                                : 0,
-                            padding:
-                                (_otherUserTyping && _typingPreview.isNotEmpty)
-                                ? const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  )
-                                : EdgeInsets.zero,
-                            decoration: BoxDecoration(
-                              color: _headerColor,
-                              border: const Border(
-                                top: BorderSide(
-                                  color: Color(0xFF3D3D3D),
-                                  width: 1,
+                  // Bottom bar: typing preview + message input (keyed for modal
+                  // positioning). Only this composer subtree rebuilds as the
+                  // keyboard slides — the message list above stays untouched.
+                  ValueListenableBuilder<double>(
+                    valueListenable: _keyboardInsetNotifier,
+                    builder: (context, _, __) {
+                      final keyboardInset = _effectiveKeyboardInset();
+                      // Emoji-panel content height (only used when the picker
+                      // shows). Shared with the bottom overlay below so the
+                      // composer lifts by exactly the grid's height.
+                      final stablePanelHeight = _currentEmojiPanelHeight();
+                      final actionPanelInset =
+                          (_isActionsPanelOpen && _actionsPanelFromKeyboard)
+                          ? _actionsPanelInset
+                          : 0.0;
+                      // The keyboard is handled as an OVERLAY: we translate the
+                      // composer up over the (un-resized) message list instead of
+                      // reserving layout space for it, so the list never relayouts.
+                      // composerInset only reserves real space for the emoji /
+                      // actions panels, which replace the keyboard.
+                      final composerInset = _showEmojiPicker
+                          ? 0.0
+                          : actionPanelInset;
+                      // Emoji open: lift the composer up by the grid's full
+                      // height (incl. bottom safe area) so it sits flush above
+                      // the bottom overlay, mirroring the keyboard-overlay path.
+                      final translateY = _showEmojiPicker
+                          ? stablePanelHeight +
+                                MediaQuery.of(context).padding.bottom
+                          : keyboardInset;
+                      return Transform.translate(
+                        offset: Offset(0, -translateY),
+                        child: Column(
+                          key: _bottomBarKey,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Typing preview - pinned at bottom, always visible
+                            Container(
+                              height:
+                                  (_otherUserTyping &&
+                                      _typingPreview.isNotEmpty)
+                                  ? null
+                                  : 0,
+                              padding:
+                                  (_otherUserTyping &&
+                                      _typingPreview.isNotEmpty)
+                                  ? const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    )
+                                  : EdgeInsets.zero,
+                              decoration: BoxDecoration(
+                                color: _headerColor,
+                                border: const Border(
+                                  top: BorderSide(
+                                    color: Color(0xFF3D3D3D),
+                                    width: 1,
+                                  ),
                                 ),
                               ),
+                              child:
+                                  (_otherUserTyping &&
+                                      _typingPreview.isNotEmpty)
+                                  ? RepaintBoundary(
+                                      child: ChatTypingPreviewBubble(
+                                        scale: scale,
+                                        otherUserName:
+                                            widget.otherUser.fullName,
+                                        typingPreview: _typingPreview,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
                             ),
-                            child:
-                                (_otherUserTyping && _typingPreview.isNotEmpty)
-                                ? RepaintBoundary(
-                                    child: ChatTypingPreviewBubble(
-                                      scale: scale,
-                                      otherUserName: widget.otherUser.fullName,
-                                      typingPreview: _typingPreview,
-                                    ),
-                                  )
-                                : const SizedBox.shrink(),
-                          ),
-                          // Common phrases bar (outside action buttons background, single row)
-                          CommonPhraseBar(
-                            phrases: _commonPhrases,
-                            hidden: _hideCommonPhrases,
-                            onChipTap: _onCommonPhraseChipTap,
-                            scale: scale,
-                          ),
-                          ChatComposerPanel(
-                            scale: scale,
-                            backgroundColor: _headerColor,
-                            composerInset: composerInset,
-                            showEmojiPicker: _showEmojiPicker,
-                            isEditing: _editingMessage != null,
-                            stablePanelHeight: stablePanelHeight,
-                            onShowEmojiPickerModal: () =>
-                                _showEmojiPickerModal(context),
-                            onClipboardPasteShortcut: _onComposerPasteShortcut,
-                            onInputContextMenuOpened: _onInputContextMenuOpened,
-                            onTextChanged: _onTextChanged,
-                            onSend: _sendMessage,
-                            messageController: _messageController,
-                            inputFocusNode: _inputFocusNode,
-                            inputScrollController: _inputScrollController,
-                            buildDoorbellComposerButton:
-                                ({
-                                  required bool showLabel,
-                                  required double iconSize,
-                                  required EdgeInsets padding,
-                                }) => _buildDoorbellComposerButton(
-                                  showLabel: showLabel,
-                                  iconSize: iconSize,
-                                  padding: padding,
-                                ),
-                            isComposerMultiline: _isComposerMultiline,
-                            editPreview: _buildEditPreview(),
-                            replyPreview: _buildReplyPreview(),
-                            sendToManyQuickAction:
-                                _buildSendToManyQuickAction(),
-                            unifiedActionsBar: _buildUnifiedActionsBar(),
-                            actionsBelowInput: widget.embedded,
-                            inlineEmojiPickerBuilder: (panelHeight) =>
-                                _buildInlineEmojiPicker(panelHeight),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-            if (_isActionsPanelOpen) _buildActionsPanelOverlay(context),
-          ],
+                            // Common phrases bar (outside action buttons background, single row)
+                            CommonPhraseBar(
+                              phrases: _commonPhrases,
+                              hidden: _hideCommonPhrases,
+                              onChipTap: _onCommonPhraseChipTap,
+                              scale: scale,
+                            ),
+                            ChatComposerPanel(
+                              scale: scale,
+                              backgroundColor: _headerColor,
+                              composerInset: composerInset,
+                              showEmojiPicker: _showEmojiPicker,
+                              isEditing: _editingMessage != null,
+                              onShowEmojiPickerModal: () =>
+                                  _showEmojiPickerModal(context),
+                              onClipboardPasteShortcut:
+                                  _onComposerPasteShortcut,
+                              onInputContextMenuOpened:
+                                  _onInputContextMenuOpened,
+                              onTextChanged: _onTextChanged,
+                              onSend: _sendMessage,
+                              messageController: _messageController,
+                              inputFocusNode: _inputFocusNode,
+                              inputScrollController: _inputScrollController,
+                              buildDoorbellComposerButton:
+                                  ({
+                                    required bool showLabel,
+                                    required double iconSize,
+                                    required EdgeInsets padding,
+                                  }) => _buildDoorbellComposerButton(
+                                    showLabel: showLabel,
+                                    iconSize: iconSize,
+                                    padding: padding,
+                                  ),
+                              isComposerMultiline: _isComposerMultiline,
+                              editPreview: _buildEditPreview(),
+                              replyPreview: _buildReplyPreview(),
+                              sendToManyQuickAction:
+                                  _buildSendToManyQuickAction(),
+                              unifiedActionsBar: _buildUnifiedActionsBar(),
+                              actionsBelowInput: widget.embedded,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              if (_isActionsPanelOpen) _buildActionsPanelOverlay(context),
+              if (_showEmojiPicker) _buildEmojiPanelOverlay(context),
+            ],
+          ),
         ),
       ),
     );
@@ -14340,6 +14422,18 @@ class _ChatScreenState extends State<ChatScreen>
                                   final link = excalidrawLinks[index];
                                   final content =
                                       (link['content'] as String?) ?? '';
+                                  // Prefer the server-provided order number so
+                                  // mobile + web show the same sequence.
+                                  final orderNumber =
+                                      (link['order_number'] as num?)?.toInt() ??
+                                      (index + 1);
+                                  final rawTitle =
+                                      (link['excalidraw_title'] as String?)
+                                          ?.trim() ??
+                                      '';
+                                  final cardTitle = rawTitle.isNotEmpty
+                                      ? rawTitle
+                                      : 'Link #$orderNumber';
                                   final extractedUrl = _extractExcalidrawUrl(
                                     content,
                                   );
@@ -14381,12 +14475,14 @@ class _ChatScreenState extends State<ChatScreen>
                                                 size: 18,
                                               ),
                                               const SizedBox(width: 6),
-                                              Text(
-                                                'Link #${index + 1}',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 15,
-                                                  fontWeight: FontWeight.w700,
+                                              Expanded(
+                                                child: Text(
+                                                  cardTitle,
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 15,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -14523,6 +14619,18 @@ class _ChatScreenState extends State<ChatScreen>
                                                 ),
                                               ),
                                             ],
+                                          ),
+                                          // Big bold centered order number
+                                          const SizedBox(height: 10),
+                                          Center(
+                                            child: Text(
+                                              '$orderNumber',
+                                              style: const TextStyle(
+                                                color: Color(0xFFFB923C),
+                                                fontSize: 30,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
                                           ),
                                         ],
                                       ),

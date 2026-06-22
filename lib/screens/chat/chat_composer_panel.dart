@@ -14,7 +14,6 @@ class ChatComposerPanel extends StatelessWidget {
     required this.composerInset,
     required this.showEmojiPicker,
     required this.isEditing,
-    required this.stablePanelHeight,
     required this.onShowEmojiPickerModal,
     required this.onClipboardPasteShortcut,
     required this.onInputContextMenuOpened,
@@ -29,7 +28,6 @@ class ChatComposerPanel extends StatelessWidget {
     required this.replyPreview,
     required this.sendToManyQuickAction,
     required this.unifiedActionsBar,
-    required this.inlineEmojiPickerBuilder,
     this.actionsBelowInput = false,
   });
 
@@ -38,7 +36,6 @@ class ChatComposerPanel extends StatelessWidget {
   final double composerInset;
   final bool showEmojiPicker;
   final bool isEditing;
-  final double stablePanelHeight;
   final VoidCallback onShowEmojiPickerModal;
   final VoidCallback onClipboardPasteShortcut;
   final VoidCallback onInputContextMenuOpened;
@@ -58,7 +55,6 @@ class ChatComposerPanel extends StatelessWidget {
   final Widget replyPreview;
   final Widget sendToManyQuickAction;
   final Widget unifiedActionsBar;
-  final Widget Function(double) inlineEmojiPickerBuilder;
 
   /// When true (desktop/web layout) the action buttons render *below* the
   /// message input to mirror the web composer. Mobile keeps them above.
@@ -234,7 +230,8 @@ class ChatComposerPanel extends StatelessWidget {
             ),
             // Desktop: actions below the input to mirror the web composer.
             if (actionsBelowInput && !showEmojiPicker) unifiedActionsBar,
-            if (showEmojiPicker) inlineEmojiPickerBuilder(stablePanelHeight),
+            // The emoji panel is rendered as a bottom OVERLAY by the parent (so
+            // it doesn't resize the message list), not inside this column.
           ],
         ),
       ),
