@@ -10957,6 +10957,46 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
+  /// Deletes the character before the cursor (or the active selection) from the
+  /// message input. Used by the emoji panel's backspace button since the system
+  /// keyboard is hidden while the panel is open. Grapheme-aware so a multi-code-
+  /// unit emoji is removed in one tap rather than leaving a broken half.
+  void _emojiBackspace() {
+    final text = _messageController.text;
+    if (text.isEmpty) return;
+
+    final sel = _messageController.selection.isValid
+        ? _messageController.selection
+        : _savedInputSelection;
+
+    int start;
+    int end;
+    if (sel != null && sel.isValid && !sel.isCollapsed) {
+      start = sel.start;
+      end = sel.end;
+    } else {
+      final cursor = (sel != null && sel.baseOffset >= 0)
+          ? sel.baseOffset.clamp(0, text.length).toInt()
+          : text.length;
+      if (cursor <= 0) return;
+      final before = text.substring(0, cursor);
+      final lastChar = before.characters.isEmpty
+          ? before
+          : before.characters.last;
+      start = cursor - lastChar.length;
+      end = cursor;
+    }
+
+    final newText = text.substring(0, start) + text.substring(end);
+    final newSelection = TextSelection.collapsed(offset: start);
+    _messageController.text = newText;
+    _messageController.selection = newSelection;
+    _savedInputSelection = newSelection;
+
+    _onTextChanged(newText);
+    setState(() {});
+  }
+
   Widget _buildInlineEmojiPicker(double panelHeight) {
     final category = _emojiCategories[_emojiCategoryIndex];
     final emojis = _normalizedEmojiList(category['emojis'] as List<String>);
@@ -10970,42 +11010,74 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       child: Column(
         children: [
-          // Category tabs
+          // Category tabs + backspace. The system keyboard (with its own
+          // backspace) is hidden while the emoji panel is open, so we provide a
+          // backspace here to delete the previous character/emoji.
           SizedBox(
             height: 44,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              itemCount: _emojiCategories.length,
-              itemBuilder: (context, index) {
-                final cat = _emojiCategories[index];
-                final icon = _normalizeEmojiForCompatibility(
-                  cat['icon'] as String,
-                );
-                final isSelected = index == _emojiCategoryIndex;
-                return GestureDetector(
-                  onTap: () => setState(() => _emojiCategoryIndex = index),
-                  child: Container(
+            child: Row(
+              children: [
+                Expanded(
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
+                      horizontal: 4,
+                      vertical: 4,
                     ),
-                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    itemCount: _emojiCategories.length,
+                    itemBuilder: (context, index) {
+                      final cat = _emojiCategories[index];
+                      final icon = _normalizeEmojiForCompatibility(
+                        cat['icon'] as String,
+                      );
+                      final isSelected = index == _emojiCategoryIndex;
+                      return GestureDetector(
+                        onTap: () =>
+                            setState(() => _emojiCategoryIndex = index),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? const Color(0xFF6D28D9)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Center(
+                            child: Text(
+                              icon.isEmpty ? '🙂' : icon,
+                              style: const TextStyle(fontSize: 20),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                // Backspace: delete the previous grapheme (handles multi-code-
+                // unit emoji), or the current selection if there is one.
+                GestureDetector(
+                  onTap: _emojiBackspace,
+                  onLongPress: _emojiBackspace,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    margin: const EdgeInsets.only(left: 2, right: 4),
                     decoration: BoxDecoration(
-                      color: isSelected
-                          ? const Color(0xFF6D28D9)
-                          : Colors.transparent,
+                      color: const Color(0xFF4A4A4A),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Center(
-                      child: Text(
-                        icon.isEmpty ? '🙂' : icon,
-                        style: const TextStyle(fontSize: 20),
-                      ),
+                    child: const Icon(
+                      Icons.backspace_outlined,
+                      color: Colors.white,
+                      size: 20,
                     ),
                   ),
-                );
-              },
+                ),
+              ],
             ),
           ),
           // Emoji grid

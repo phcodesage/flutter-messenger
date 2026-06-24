@@ -94,6 +94,9 @@ class ChatComposerPanel extends StatelessWidget {
       child: ChatComposerShell(
         composerInset: composerInset,
         backgroundColor: backgroundColor,
+        // While the emoji panel is open it pads for the bottom safe area itself;
+        // skip it here so there's no duplicate gap above the emoji grid.
+        applyBottomSafeArea: !showEmojiPicker,
         padding: EdgeInsets.only(
           left: 8 * scale,
           right: 12 * scale,
