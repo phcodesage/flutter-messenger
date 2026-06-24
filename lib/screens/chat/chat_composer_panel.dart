@@ -17,6 +17,7 @@ class ChatComposerPanel extends StatelessWidget {
     required this.onShowEmojiPickerModal,
     required this.onClipboardPasteShortcut,
     required this.onInputContextMenuOpened,
+    required this.onContentInserted,
     required this.onTextChanged,
     required this.onSend,
     required this.messageController,
@@ -39,6 +40,10 @@ class ChatComposerPanel extends StatelessWidget {
   final VoidCallback onShowEmojiPickerModal;
   final VoidCallback onClipboardPasteShortcut;
   final VoidCallback onInputContextMenuOpened;
+
+  /// Called when the soft keyboard inserts rich content (e.g. an image/GIF via
+  /// the keyboard's media button, which uses Android's commitContent API).
+  final void Function(KeyboardInsertedContent) onContentInserted;
   final void Function(String) onTextChanged;
   final VoidCallback onSend;
   final TextEditingController messageController;
@@ -81,6 +86,7 @@ class ChatComposerPanel extends StatelessWidget {
       messageTextStyle: messageTextStyle,
       onClipboardPasteShortcut: onClipboardPasteShortcut,
       onInputContextMenuOpened: onInputContextMenuOpened,
+      onContentInserted: onContentInserted,
       onTextChanged: onTextChanged,
     );
 
@@ -271,6 +277,7 @@ class _ComposerInput extends StatelessWidget {
     required this.messageTextStyle,
     required this.onClipboardPasteShortcut,
     required this.onInputContextMenuOpened,
+    required this.onContentInserted,
     required this.onTextChanged,
   });
 
@@ -281,6 +288,7 @@ class _ComposerInput extends StatelessWidget {
   final TextStyle messageTextStyle;
   final VoidCallback onClipboardPasteShortcut;
   final VoidCallback onInputContextMenuOpened;
+  final void Function(KeyboardInsertedContent) onContentInserted;
   final void Function(String) onTextChanged;
 
   @override
@@ -320,6 +328,21 @@ class _ComposerInput extends StatelessWidget {
               controller: messageController,
               focusNode: inputFocusNode,
               scrollController: inputScrollController,
+              // Advertise rich-content support so the keyboard's image/GIF
+              // button is enabled (Android commitContent). Without this the
+              // keyboard reports "application does not support image pasting".
+              contentInsertionConfiguration: ContentInsertionConfiguration(
+                allowedMimeTypes: const <String>[
+                  'image/png',
+                  'image/jpeg',
+                  'image/gif',
+                  'image/webp',
+                  'image/*',
+                  'video/mp4',
+                  'video/*',
+                ],
+                onContentInserted: onContentInserted,
+              ),
               onTapOutside: (_) {},
               contextMenuBuilder: (context, editableTextState) {
                 onInputContextMenuOpened();

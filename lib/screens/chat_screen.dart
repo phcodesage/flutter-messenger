@@ -5365,25 +5365,10 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Future<void> _pasteFromClipboard() async {
-    // Try image first (via native channel), then fall back to plain text.
-    // Check if there's an image on the clipboard by attempting the native call.
-    try {
-      final bytes = await _fileOpsChannel.invokeMethod<Uint8List>(
-        'getClipboardImagePngBytes',
-      );
-      if (bytes != null && bytes.isNotEmpty) {
-        // Hand off to the existing image paste flow.
-        await _tryHandleClipboardImagePaste();
-        return;
-      }
-    } on PlatformException catch (e) {
-      if (e.code != 'NO_IMAGE' && e.code != 'UNAVAILABLE') {
-        debugPrint('[Paste] native image check failed: ${e.code} ${e.message}');
-      }
-    } on MissingPluginException {
-      // Native method not available — fall through to text paste.
-    } catch (e) {
-      debugPrint('[Paste] unexpected error checking clipboard image: $e');
+    // Try clipboard media first — a copied image/video file, then raw image
+    // data (screenshots). Fall back to plain text if there's no media.
+    if (await _tryPasteClipboardMedia()) {
+      return;
     }
 
     // Fall back to plain text.
@@ -8101,6 +8086,58 @@ class _ChatScreenState extends State<ChatScreen>
     unawaited(_tryHandleClipboardImagePaste());
   }
 
+  /// Handles rich content inserted by the soft keyboard's image/GIF button
+  /// (Android commitContent). Writes the bytes to a temp file and opens the
+  /// existing media preview modal (which supports both images and video).
+  Future<void> _onKeyboardContentInserted(
+    KeyboardInsertedContent content,
+  ) async {
+    debugPrint(
+      '[ClipboardPaste] keyboard inserted content: mime=${content.mimeType}, '
+      'hasData=${content.hasData}, uri=${content.uri}',
+    );
+
+    final data = content.data;
+    if (!content.hasData || data == null || data.isEmpty) {
+      debugPrint('[ClipboardPaste] keyboard content has no usable bytes');
+      if (mounted) {
+        _showTopBanner(
+          'Could not read the inserted media.',
+          backgroundColor: const Color(0xFF1F2937),
+          icon: Icons.info_outline,
+          autoHideAfter: const Duration(seconds: 2),
+        );
+      }
+      return;
+    }
+
+    try {
+      final subtype = content.mimeType.split('/').last.trim();
+      final ext = subtype.isNotEmpty ? subtype : 'bin';
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'keyboard_media_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsBytes(data, flush: true);
+      debugPrint(
+        '[ClipboardPaste] wrote keyboard media: path=${file.path}, bytes=${data.length}',
+      );
+
+      if (!mounted) return;
+      await _showFilePreviewModal(file, fileName, isFromCamera: false);
+    } catch (e) {
+      debugPrint('[ClipboardPaste] keyboard content paste failed: $e');
+      if (mounted) {
+        _showTopBanner(
+          'Paste failed: $e',
+          backgroundColor: const Color(0xFFB91C1C),
+          icon: Icons.error_outline,
+          autoHideAfter: const Duration(seconds: 3),
+        );
+      }
+    }
+  }
+
   void _onInputContextMenuOpened() {
     debugPrint('[ClipboardPaste] input context menu opened');
   }
@@ -8175,14 +8212,68 @@ class _ChatScreenState extends State<ChatScreen>
           : 'other'}',
     );
 
+    final handled = await _tryPasteClipboardMedia();
+    if (!handled && showNoImageBanner && mounted) {
+      _showTopBanner(
+        'Clipboard has no image or video to paste.',
+        backgroundColor: const Color(0xFF1F2937),
+        icon: Icons.info_outline,
+        autoHideAfter: const Duration(seconds: 2),
+      );
+    }
+  }
+
+  /// Tries to paste an image or video from the clipboard, opening the file
+  /// preview modal when media is found. Returns `true` if a preview was opened
+  /// (clipboard media handled), or `false` when the clipboard has no pasteable
+  /// image/video so the caller can fall back to plain text.
+  Future<bool> _tryPasteClipboardMedia() async {
     if (!(Platform.isMacOS ||
         Platform.isWindows ||
         Platform.isLinux ||
         Platform.isAndroid)) {
       debugPrint('[ClipboardPaste] unsupported platform, skipping');
-      return;
+      return false;
     }
 
+    // 1) A real media file on the clipboard (image OR video copied from a file
+    //    manager / gallery). Preserves the original format and extension.
+    try {
+      final media = await _fileOpsChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getClipboardMediaFile',
+      );
+      final path = media?['path'] as String?;
+      if (path != null && path.isNotEmpty) {
+        final file = File(path);
+        if (await file.exists() && await file.length() > 0) {
+          final mediaName = media?['fileName'] as String?;
+          final fileName = (mediaName != null && mediaName.isNotEmpty)
+              ? mediaName
+              : path.split('/').last;
+          if (!mounted) return false;
+          debugPrint(
+            '[ClipboardPaste] opening preview for clipboard media file: $path',
+          );
+          await _showFilePreviewModal(file, fileName, isFromCamera: false);
+          return true;
+        }
+      }
+    } on MissingPluginException {
+      // Older native build without media-file support — fall back to raw bytes.
+      debugPrint(
+        '[ClipboardPaste] getClipboardMediaFile missing; falling back',
+      );
+    } on PlatformException catch (e) {
+      if (e.code != 'NO_IMAGE' && e.code != 'UNAVAILABLE') {
+        debugPrint(
+          '[ClipboardPaste] getClipboardMediaFile failed: ${e.code} ${e.message}',
+        );
+      }
+    } catch (e) {
+      debugPrint('[ClipboardPaste] getClipboardMediaFile error: $e');
+    }
+
+    // 2) Raw image data (e.g. screenshots copied as a bitmap).
     try {
       debugPrint('[ClipboardPaste] requesting getClipboardImagePngBytes');
       final bytes = await _fileOpsChannel.invokeMethod<Uint8List>(
@@ -8190,15 +8281,7 @@ class _ChatScreenState extends State<ChatScreen>
       );
       if (bytes == null || bytes.isEmpty) {
         debugPrint('[ClipboardPaste] native returned no bytes');
-        if (showNoImageBanner && mounted) {
-          _showTopBanner(
-            'Clipboard has no image to paste.',
-            backgroundColor: const Color(0xFF1F2937),
-            icon: Icons.info_outline,
-            autoHideAfter: const Duration(seconds: 2),
-          );
-        }
-        return;
+        return false;
       }
 
       final tempDir = await getTemporaryDirectory();
@@ -8210,39 +8293,43 @@ class _ChatScreenState extends State<ChatScreen>
         '[ClipboardPaste] wrote temp image file: path=${file.path}, bytes=${bytes.length}',
       );
 
-      if (!mounted) return;
+      if (!mounted) return false;
       debugPrint('[ClipboardPaste] opening file preview modal');
       await _showFilePreviewModal(file, fileName, isFromCamera: false);
       debugPrint('[ClipboardPaste] preview modal opened');
+      return true;
     } on PlatformException catch (e) {
       // Ignore unsupported platforms or empty clipboard image lookups.
       if (e.code == 'NO_IMAGE' || e.code == 'UNAVAILABLE') {
         debugPrint(
           '[ClipboardPaste] native says no image/unavailable: ${e.code}',
         );
-        return;
+        return false;
       }
       debugPrint('Clipboard image paste failed: ${e.code} ${e.message}');
       if (mounted) {
         _showTopBanner(
-          'Paste image failed: ${e.message ?? e.code}',
+          'Paste failed: ${e.message ?? e.code}',
           backgroundColor: const Color(0xFFB91C1C),
           icon: Icons.error_outline,
           autoHideAfter: const Duration(seconds: 3),
         );
       }
+      return false;
     } on MissingPluginException {
       debugPrint('Clipboard image paste failed: missing native plugin method');
       if (mounted) {
         _showTopBanner(
-          'Paste image not available yet. Please restart the app once.',
+          'Paste not available yet. Please restart the app once.',
           backgroundColor: const Color(0xFFB91C1C),
           icon: Icons.error_outline,
           autoHideAfter: const Duration(seconds: 4),
         );
       }
+      return false;
     } catch (e) {
       debugPrint('Clipboard image paste failed: $e');
+      return false;
     }
   }
 
@@ -11629,6 +11716,7 @@ class _ChatScreenState extends State<ChatScreen>
                                   _onComposerPasteShortcut,
                               onInputContextMenuOpened:
                                   _onInputContextMenuOpened,
+                              onContentInserted: _onKeyboardContentInserted,
                               onTextChanged: _onTextChanged,
                               onSend: _sendMessage,
                               messageController: _messageController,

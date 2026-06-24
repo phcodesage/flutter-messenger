@@ -397,6 +397,15 @@ class MainActivity : FlutterActivity() {
                             result.error("CLIPBOARD_READ_FAILED", e.message, null)
                         }
                     }
+                    "getClipboardMediaFile" -> {
+                        try {
+                            val media = getClipboardMediaFile()
+                            result.success(media)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "getClipboardMediaFile error: ${e.message}", e)
+                            result.error("CLIPBOARD_READ_FAILED", e.message, null)
+                        }
+                    }
                     "openDownloadedFile" -> {
                         try {
                             val target = call.argument<String>("target")
@@ -667,6 +676,124 @@ class MainActivity : FlutterActivity() {
 
         Log.d(CLIPBOARD_TAG, "getClipboardImagePngBytes: no image bytes extracted")
         return null
+    }
+
+    /**
+     * Returns the first image OR video file referenced by the clipboard, copied
+     * into the app cache with its original format/extension preserved. The map
+     * has keys "path", "mimeType" and "fileName", or null when the clipboard
+     * holds no pasteable image/video item. Used by the composer Paste button so
+     * copied media (incl. video) can be attached, not just decoded bitmaps.
+     */
+    private fun getClipboardMediaFile(): Map<String, Any>? {
+        Log.d(CLIPBOARD_TAG, "getClipboardMediaFile called")
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return null
+        if (!clipboard.hasPrimaryClip()) {
+            Log.d(CLIPBOARD_TAG, "getClipboardMediaFile: no primary clip")
+            return null
+        }
+
+        val clip = clipboard.primaryClip ?: return null
+        Log.d(CLIPBOARD_TAG, "getClipboardMediaFile: itemCount=${clip.itemCount}")
+        for (index in 0 until clip.itemCount) {
+            val item = clip.getItemAt(index)
+            val uriCandidates = mutableListOf<Uri>()
+            item.uri?.let { uriCandidates.add(it) }
+            item.intent?.data?.let { uriCandidates.add(it) }
+
+            val textUri = item.text?.toString()?.trim()
+            if (!textUri.isNullOrEmpty() &&
+                (textUri.startsWith("content://") || textUri.startsWith("file://"))) {
+                try {
+                    uriCandidates.add(Uri.parse(textUri))
+                } catch (_: Exception) {
+                    // Ignore malformed URIs from clipboard providers.
+                }
+            }
+
+            for (uri in uriCandidates) {
+                val mime = resolveMediaMimeType(uri) ?: continue
+                if (!(mime.startsWith("image/") || mime.startsWith("video/"))) {
+                    Log.d(CLIPBOARD_TAG, "getClipboardMediaFile: skipping non-media mime=$mime uri=$uri")
+                    continue
+                }
+                val copied = copyUriToCacheFile(uri, mime) ?: continue
+                Log.d(CLIPBOARD_TAG, "getClipboardMediaFile: copied uri=$uri -> ${copied.absolutePath} ($mime)")
+                return mapOf(
+                    "path" to copied.absolutePath,
+                    "mimeType" to mime,
+                    "fileName" to copied.name,
+                )
+            }
+        }
+
+        Log.d(CLIPBOARD_TAG, "getClipboardMediaFile: no media file found")
+        return null
+    }
+
+    private fun resolveMediaMimeType(uri: Uri): String? {
+        contentResolver.getType(uri)?.let { return it }
+        val ext = MimeTypeMap.getFileExtensionFromUrl(uri.toString())
+        if (!ext.isNullOrEmpty()) {
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase())?.let { return it }
+        }
+        return null
+    }
+
+    private fun copyUriToCacheFile(uri: Uri, mimeType: String): File? {
+        return try {
+            val displayName = queryClipboardDisplayName(uri)
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+                ?: displayName?.substringAfterLast('.', "")?.takeIf { it.isNotEmpty() }
+                ?: uri.lastPathSegment?.substringAfterLast('.', "")?.takeIf { it.isNotEmpty() }
+                ?: "bin"
+            val rawBase = displayName?.substringBeforeLast('.', displayName) ?: "pasted_media"
+            val safeBase = rawBase.replace(Regex("[^A-Za-z0-9._-]"), "_").take(64)
+            val fileName = "${safeBase}_${System.currentTimeMillis()}.$ext"
+
+            val dir = File(cacheDir, "pasted_media").apply { mkdirs() }
+            val outFile = File(dir, fileName)
+
+            val copied = contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(outFile).use { output ->
+                    input.copyTo(output)
+                }
+                true
+            } ?: false
+
+            if (!copied || outFile.length() == 0L) {
+                outFile.delete()
+                Log.d(CLIPBOARD_TAG, "copyUriToCacheFile: empty/failed copy for uri=$uri")
+                null
+            } else {
+                outFile
+            }
+        } catch (e: Exception) {
+            Log.d(CLIPBOARD_TAG, "copyUriToCacheFile failed for uri=$uri: ${e.message}")
+            null
+        }
+    }
+
+    private fun queryClipboardDisplayName(uri: Uri): String? {
+        return try {
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun isLikelyImageClipItem(clip: ClipData, index: Int, item: ClipData.Item): Boolean {
