@@ -79,7 +79,6 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   Timer? _pendingNotificationRetryTimer;
   Future<int?> _currentUserId = StorageService.getUserId();
   bool _isSharePickerOpen = false;
-  bool _hasAiSession = false;
   String? _aiLastMessageTime;
   String? _aiLastMessagePreview;
   Map<String, dynamic>? _deferredUpdatePayload;
@@ -2017,116 +2016,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   Future<void> _loadAiSessionPresence() async {
     final userId = await StorageService.getUserId();
     if (userId == null) {
-      if (!mounted) return;
-      setState(() {
-        _hasAiSession = false;
-      });
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
-    String? aiLastMessageTime = prefs.getString('ai_last_message_time_$userId');
-    String? aiLastMessagePreview = prefs.getString(
+    final String? aiLastMessageTime = prefs.getString('ai_last_message_time_$userId');
+    final String? aiLastMessagePreview = prefs.getString(
       'ai_last_message_preview_$userId',
     );
 
-    // Always try fetching the latest message from the server to stay in sync
-    // with conversations that may have happened on web or other devices.
-    try {
-      final token = await StorageService.getToken();
-      if (token != null) {
-        final baseUrl = ApiConfig.baseUrl.trim().endsWith('/')
-            ? ApiConfig.baseUrl.trim().substring(
-                0,
-                ApiConfig.baseUrl.trim().length - 1,
-              )
-            : ApiConfig.baseUrl.trim();
-        // Fetch current session
-        final sessionRes = await http
-            .get(
-              Uri.parse('$baseUrl/api/ai/sessions/current'),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-            )
-            .timeout(ApiConfig.connectionTimeout);
-
-        if (sessionRes.statusCode == 200 || sessionRes.statusCode == 201) {
-          final sessionPayload =
-              jsonDecode(sessionRes.body) as Map<String, dynamic>;
-          final session = sessionPayload['session'] as Map<String, dynamic>?;
-          final sessionId = session?['id'] ?? sessionPayload['id'];
-
-          if (sessionId != null) {
-            // Fetch messages for this session
-            final msgRes = await http
-                .get(
-                  Uri.parse('$baseUrl/api/ai/sessions/$sessionId/messages'),
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer $token',
-                  },
-                )
-                .timeout(ApiConfig.connectionTimeout);
-
-            if (msgRes.statusCode == 200) {
-              final msgPayload =
-                  jsonDecode(msgRes.body) as Map<String, dynamic>;
-              final rawMessages =
-                  (msgPayload['messages'] as List<dynamic>? ?? <dynamic>[]);
-
-              if (rawMessages.isNotEmpty) {
-                // Get the last message (most recent)
-                final lastMsg = rawMessages.last as Map<String, dynamic>;
-                final role = lastMsg['role'] as String? ?? '';
-                final content = (lastMsg['content'] as String? ?? '').trim();
-                final timestamp =
-                    lastMsg['created_at'] as String? ??
-                    lastMsg['timestamp'] as String? ??
-                    '';
-
-                if (content.isNotEmpty) {
-                  if (role == 'user') {
-                    aiLastMessagePreview =
-                        'You: ${content.length > 50 ? '${content.substring(0, 50)}...' : content}';
-                  } else {
-                    aiLastMessagePreview = content.length > 60
-                        ? '${content.substring(0, 60)}...'
-                        : content;
-                  }
-                  if (timestamp.isNotEmpty) {
-                    aiLastMessageTime = timestamp;
-                  }
-
-                  // Cache for next time
-                  if (aiLastMessageTime != null) {
-                    prefs.setString(
-                      'ai_last_message_time_$userId',
-                      aiLastMessageTime!,
-                    );
-                  }
-                  prefs.setString(
-                    'ai_last_message_preview_$userId',
-                    aiLastMessagePreview!,
-                  );
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('[LOBBY] Failed to fetch AI session from server: $e');
-    }
-
     if (!mounted) return;
     setState(() {
-      // Always show the AI chat tile — the session will be recovered from the
-      // server when the user opens it.  Previously this was gated on the local
-      // session ID, which caused the tile to vanish after app updates wiped
-      // SharedPreferences / Android Keystore.
-      _hasAiSession = true;
       _aiLastMessageTime = aiLastMessageTime;
       _aiLastMessagePreview = aiLastMessagePreview;
     });

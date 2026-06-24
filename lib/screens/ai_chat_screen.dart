@@ -57,7 +57,7 @@ class _AiChatScreenState extends State<AiChatScreen>
   /// Periodic timer to poll for new AI messages from other devices.
   Timer? _crossDeviceSyncTimer;
 
-  bool _isLoading = false;
+  bool _isLoading = true;
   bool _isSending = false;
   bool _showEmojiPicker = false;
   bool _showTimestamps = false;
@@ -1292,6 +1292,34 @@ class _AiChatScreenState extends State<AiChatScreen>
         List<Map<String, String>>.from(_messages),
       ),
     );
+
+    // Persist last AI message time + preview so lobby can sort/display correctly
+    if (_messages.isNotEmpty) {
+      final lastMsg = _messages.last;
+      final role = lastMsg['role'] ?? '';
+      final content = (lastMsg['content'] ?? '').trim();
+      final timestamp = lastMsg['timestamp'] ?? '';
+
+      if (content.isNotEmpty) {
+        final preview = role == 'user'
+            ? 'You: ${content.length > 50 ? '${content.substring(0, 50)}...' : content}'
+            : (content.length > 60 ? '${content.substring(0, 60)}...' : content);
+
+        unawaited(
+          SharedPreferences.getInstance().then((prefs) {
+            prefs.setString('ai_last_message_preview_$userId', preview);
+            if (timestamp.isNotEmpty) {
+              prefs.setString('ai_last_message_time_$userId', timestamp);
+            } else {
+              prefs.setString(
+                'ai_last_message_time_$userId',
+                DateTime.now().toUtc().toIso8601String(),
+              );
+            }
+          }),
+        );
+      }
+    }
   }
 
   Future<void> _loadUiPreferences() async {
@@ -1317,6 +1345,25 @@ class _AiChatScreenState extends State<AiChatScreen>
         '[AiChatScreen] User ID: $userId, Saved session ID: $savedSessionId',
       );
 
+      // Cache-first hydration: load locally saved session and its cached messages immediately
+      // before making any network calls so the screen populates instantly.
+      if (savedSessionId != null) {
+        _sessionId = savedSessionId;
+        final cached = await ChatCacheService.loadAiSessionMessages(
+          userId,
+          savedSessionId,
+        );
+        if (cached.isNotEmpty && mounted) {
+          setState(() {
+            _messages
+              ..clear()
+              ..addAll(cached);
+            _isLoading = false; // Turn off spinner immediately since we have cached messages!
+          });
+          _jumpToBottomWhenSettled();
+        }
+      }
+
       // Always fetch the current (most recently updated) session from the server
       // to stay in sync with other devices (web, etc.). The locally saved ID may
       // be stale if the user chatted on another device.
@@ -1330,29 +1377,19 @@ class _AiChatScreenState extends State<AiChatScreen>
         );
         _sessionId = serverSessionId;
         await StorageService.saveAiSessionId(userId, serverSessionId);
+        // If we switched sessions, show loader while fetching new messages
+        if (mounted) {
+          setState(() {
+            _isLoading = true;
+          });
+        }
+        await _loadMessages(token, serverSessionId);
+      } else if (serverSessionId != null) {
+        // Same session. Sync messages.
         await _loadMessages(token, serverSessionId);
       } else if (savedSessionId != null) {
-        _log(
-          'Attempting to load messages for saved session ID: $savedSessionId',
-        );
-        final loadResult = await _loadMessages(token, savedSessionId);
-        _log('Load result for session $savedSessionId: $loadResult');
-        if (loadResult == _LoadResult.success) {
-          _sessionId = savedSessionId;
-          _log('Successfully loaded existing session: $savedSessionId');
-        } else if (loadResult == _LoadResult.sessionNotFound) {
-          // Session was deleted, clear the saved ID and recover from server
-          _log(
-            'Session $savedSessionId not found, clearing saved ID and recovering from server',
-          );
-          await StorageService.clearAiSessionId(userId);
-        } else {
-          // Network error, keep the saved session ID for retry
-          _log(
-            'Network error loading session $savedSessionId, keeping for retry',
-          );
-          _sessionId = savedSessionId;
-        }
+        // Server fetch failed, but we had a savedSessionId. Load messages for it.
+        await _loadMessages(token, savedSessionId);
       }
 
       // If still no valid session (network error on both paths), try server again
@@ -1367,7 +1404,15 @@ class _AiChatScreenState extends State<AiChatScreen>
           // Load the messages for the recovered session
           await _loadMessages(token, _sessionId!);
         } else {
-          _log('Failed to recover session from server');
+          // No session found on server, create one
+          final newId = await _createSession(token);
+          if (newId != null) {
+            _sessionId = newId;
+            await StorageService.saveAiSessionId(userId, newId);
+            await _loadMessages(token, newId);
+          } else {
+            _log('Failed to recover or create session from server');
+          }
         }
       }
 
@@ -1483,16 +1528,7 @@ class _AiChatScreenState extends State<AiChatScreen>
           ..addAll(parsed);
       });
 
-      // Persist a fresh snapshot for the next cold open. Fire-and-forget.
-      if (_currentUserId != null) {
-        unawaited(
-          ChatCacheService.saveAiSessionMessages(
-            _currentUserId!,
-            sessionId,
-            parsed,
-          ),
-        );
-      }
+      _persistAiSnapshot();
       return _LoadResult.success;
     } catch (_) {
       return _LoadResult.networkError;

@@ -231,6 +231,9 @@ class _ChatScreenState extends State<ChatScreen>
   // visible until the keyboard has risen to the held height.
   bool _emojiKeyboardSwitching = false;
   Timer? _emojiSwitchTimer;
+  // Drives the keyboard inset back to 0 when the emoji panel is dismissed
+  // outright (system Back) — there's no IME animating down to collapse it.
+  Timer? _emojiCollapseTimer;
   double _lastKnownKeyboardInset = 0;
   // App-wide cache of the keyboard height so the FIRST open in a freshly opened
   // chat can snap instantly too (per-screen state resets, this doesn't).
@@ -680,8 +683,42 @@ class _ChatScreenState extends State<ChatScreen>
   /// The message list is never rebuilt or resized, so following the keyboard
   /// frame-by-frame stays smooth and "attached", WhatsApp-style.
   void _setKeyboardInset(double newInset) {
+    // A real keyboard movement supersedes an in-flight emoji-dismiss collapse.
+    _emojiCollapseTimer?.cancel();
     if ((newInset - _keyboardInsetNotifier.value).abs() < 0.5) return;
     _keyboardInsetNotifier.value = newInset;
+  }
+
+  /// Smoothly collapse the keyboard inset to 0 when the emoji panel is dismissed
+  /// outright (e.g. system Back). The composer translate and the message list's
+  /// bottom spacer both ride [_keyboardInsetNotifier]; since no IME is animating
+  /// down to drive it, we ease it to 0 ourselves so the composer drops and the
+  /// list shrinks instead of leaving a wide empty gap where the grid was.
+  void _animateKeyboardInsetToZero() {
+    _emojiCollapseTimer?.cancel();
+    final start = _keyboardInsetNotifier.value;
+    if (start <= 0.5) {
+      _keyboardInsetNotifier.value = 0;
+      return;
+    }
+    const totalMs = 200;
+    final stopwatch = Stopwatch()..start();
+    _emojiCollapseTimer = Timer.periodic(const Duration(milliseconds: 16), (
+      timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final t = (stopwatch.elapsedMilliseconds / totalMs).clamp(0.0, 1.0);
+      // easeOutCubic so it decelerates into place, matching the IME feel.
+      final eased = 1 - math.pow(1 - t, 3).toDouble();
+      _keyboardInsetNotifier.value = start * (1 - eased);
+      if (t >= 1.0) {
+        _keyboardInsetNotifier.value = 0;
+        timer.cancel();
+      }
+    });
   }
 
   Future<void> _restoreInputFocusAfterResume() async {
@@ -9960,8 +9997,28 @@ class _ChatScreenState extends State<ChatScreen>
     _saveCurrentInputSelection();
 
     if (_showEmojiPicker) {
-      // Closing emoji picker â†’ bring keyboard back
+      // Closing emoji picker â†’ bring keyboard back.
+      // As the IME re-appears its inset animates 0 → full height. If the message
+      // list's bottom spacer (driven by _keyboardInsetNotifier) followed that raw
+      // inset it would collapse to ~0 and snap back up — the "chat area jumping
+      // bottom→top". Instead hold the inset constant at the panel height and let
+      // didChangeMetrics resume tracking only once the keyboard has risen back to
+      // (roughly) that height, so the list/composer stay put. WhatsApp-smooth.
       _startInputModeLock(stablePanelHeight);
+      final heldInset = _keyboardInsetNotifier.value > 0
+          ? _keyboardInsetNotifier.value
+          : (_lastKnownKeyboardInset > 0
+                ? _lastKnownKeyboardInset
+                : stablePanelHeight);
+      _keyboardInsetNotifier.value = heldInset;
+      _emojiKeyboardSwitching = true;
+      _emojiSwitchTimer?.cancel();
+      // Safety release: if the keyboard never reaches the held height (e.g. a
+      // shorter IME), stop holding so tracking can't get stuck.
+      _emojiSwitchTimer = Timer(const Duration(milliseconds: 450), () {
+        if (!mounted) return;
+        _emojiKeyboardSwitching = false;
+      });
       setState(() {
         _showEmojiPicker = false;
       });
@@ -11394,6 +11451,8 @@ class _ChatScreenState extends State<ChatScreen>
     unawaited(_persistConversationCacheSnapshot());
     _fileOpsChannel.setMethodCallHandler(null);
     _inputModeSwitchTimer?.cancel();
+    _emojiSwitchTimer?.cancel();
+    _emojiCollapseTimer?.cancel();
     _keyboardInsetNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _retryProgressSubscription?.cancel();
@@ -11452,6 +11511,9 @@ class _ChatScreenState extends State<ChatScreen>
         if (_showEmojiPicker) {
           setState(() => _showEmojiPicker = false);
           _inputFocusNode.unfocus();
+          // No IME is coming back, so collapse the held inset ourselves;
+          // otherwise the composer stays lifted over an empty gap.
+          _animateKeyboardInsetToZero();
         } else if (_isKeyboardVisible) {
           _inputFocusNode.unfocus();
         }
@@ -11719,13 +11781,25 @@ class _ChatScreenState extends State<ChatScreen>
                       final composerInset = _showEmojiPicker
                           ? 0.0
                           : actionPanelInset;
+                      // While switching between the emoji panel and the keyboard
+                      // (260ms lock), the keyboard inset is briefly 0 before the
+                      // IME animates in. Hold the composer at the locked panel
+                      // height as a floor so it doesn't drop to the bottom and
+                      // snap back up — it stays put until the keyboard catches up.
+                      // Note: the floor has no +bottomSafe because once the emoji
+                      // panel closes the composer regains its own bottom safe-area
+                      // padding, which keeps the input row visually stationary.
+                      final lockedFloor =
+                          (_isSwitchingInputMode && _lockedInputPanelHeight > 0)
+                          ? _lockedInputPanelHeight
+                          : 0.0;
                       // Emoji open: lift the composer up by the grid's full
                       // height (incl. bottom safe area) so it sits flush above
                       // the bottom overlay, mirroring the keyboard-overlay path.
                       final translateY = _showEmojiPicker
                           ? stablePanelHeight +
                                 MediaQuery.of(context).padding.bottom
-                          : keyboardInset;
+                          : math.max(keyboardInset, lockedFloor);
                       return Transform.translate(
                         offset: Offset(0, -translateY),
                         child: Column(
