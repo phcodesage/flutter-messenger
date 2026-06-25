@@ -7149,7 +7149,7 @@ class _ChatScreenState extends State<ChatScreen>
           _crossDeviceActivePeerId != null &&
           otherUserId == _crossDeviceActivePeerId;
 
-      if (matchesTrackedRoom || matchesTrackedPeer) {
+      if (matchesTrackedRoom || matchesTrackedPeer || roomId == null || roomId.isEmpty) {
         _callInProgressOnOtherDeviceTimer?.cancel();
         setState(() {
           _crossDeviceActiveCallRoomId = null;

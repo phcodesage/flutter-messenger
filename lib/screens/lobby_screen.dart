@@ -3767,10 +3767,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       // the call was declined on web or on this mobile (and on call end).
       _clearIncomingCallNotificationsForEvent(data);
 
+      if (roomId.isEmpty) {
+        setState(() {
+          _crossDeviceActiveCallRoomByUserId.clear();
+        });
+        return;
+      }
+
       if (otherUserId != null &&
           _crossDeviceActiveCallRoomByUserId.containsKey(otherUserId)) {
         final trackedRoom = _crossDeviceActiveCallRoomByUserId[otherUserId];
-        if (trackedRoom == null || trackedRoom == roomId || roomId.isEmpty) {
+        if (trackedRoom == null || trackedRoom == roomId) {
           setState(() {
             _crossDeviceActiveCallRoomByUserId.remove(otherUserId);
           });
