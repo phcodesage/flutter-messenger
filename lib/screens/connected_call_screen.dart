@@ -1058,7 +1058,7 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
-          _showEndCallConfirmation();
+          _minimizeToOverlay();
         }
       },
       child: Scaffold(
@@ -1490,33 +1490,6 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  void _showEndCallConfirmation() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2D2D2D),
-        title: const Text('End Call?', style: TextStyle(color: Colors.white)),
-        content: const Text(
-          'Are you sure you want to end this call?',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _endCall();
-            },
-            child: const Text('End Call', style: TextStyle(color: Colors.red)),
-          ),
-        ],
       ),
     );
   }
