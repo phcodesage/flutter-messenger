@@ -2,16 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../screens/chat_screen.dart' show ChatScreen;
-import '../screens/connected_call_screen.dart';
 import '../screens/group_chat_screen.dart';
-import '../widgets/incoming_call_setup_modal.dart';
 import '../models/group.dart';
 import '../models/lobby_user.dart';
 import '../services/active_chat_service.dart';
-import '../services/call_service.dart';
 import '../services/group_service.dart';
 import '../services/socket_service.dart';
-import '../services/presence_service.dart';
+import '../services/pending_incoming_call_service.dart';
 import '../services/version_service.dart';
 
 /// Helper class to handle notification taps and navigate to appropriate screens
@@ -149,20 +146,48 @@ class NotificationHandler {
   }
 
   /// Handle incoming call notification tap - show incoming call modal
-  static Future<void> _handleIncomingCallNotification(
-    Map<String, dynamic> data,
+  /// Wait for the socket to (re)connect after returning from background, then
+  /// join the call room and request the pending offer + buffered ICE. Answering
+  /// from a notification tap fails if we fire these before the socket is up.
+  static Future<void> _requestPendingOfferWhenConnected(
+    SocketService socketService,
+    String callRoomId,
+    int senderId,
   ) async {
-    debugPrint('📞 Handling incoming call notification: $data');
-
-    // Guard against duplicate call setups (same as lobby/chat screens)
-    // This prevents conflicts when both socket events and FCM notifications arrive
-    if (PresenceService().isHandlingIncomingCall) {
+    const stepMs = 200;
+    const maxWaitMs = 10000;
+    var waited = 0;
+    // Kick a reconnect in case the socket dropped while backgrounded.
+    socketService.ensureConnected();
+    while (!socketService.isConnected && waited < maxWaitMs) {
+      await Future.delayed(const Duration(milliseconds: stepMs));
+      waited += stepMs;
+      if (waited % 1000 == 0) socketService.ensureConnected();
+    }
+    if (!socketService.isConnected) {
       debugPrint(
-        '⚠️ Already handling an incoming call, ignoring FCM duplicate',
+        '❌ Socket still not connected after ${waited}ms — cannot fetch pending offer',
       );
       return;
     }
-    PresenceService().isHandlingIncomingCall = true;
+    debugPrint(
+      '📞 Socket connected after ${waited}ms — joining room + requesting pending offer for $callRoomId',
+    );
+    // Join the chat/call room so the caller's offer/ICE and our answer flow
+    // through it (backend allows participants to join chat_<a>_<b>).
+    socketService.emit('join_room', {'room': callRoomId});
+    socketService.emit('request_pending_offer', {'room': callRoomId});
+    // Backup: also request a fresh offer directly from the caller.
+    socketService.emit('request_call_offer', {
+      'call_room_id': callRoomId,
+      'caller_id': senderId,
+    });
+  }
+
+  static Future<void> _handleIncomingCallNotification(
+    Map<String, dynamic> data,
+  ) async {
+    debugPrint('📞 Handling incoming call notification (tap): $data');
 
     final senderId = int.tryParse(data['sender_id']?.toString() ?? '');
     final senderName = data['sender_name'] as String? ?? 'Unknown';
@@ -172,151 +197,44 @@ class NotificationHandler {
 
     if (senderId == null) {
       debugPrint('❌ Invalid sender_id for call notification');
-      PresenceService().isHandlingIncomingCall = false;
       return;
     }
 
-    final context = navigatorKey.currentContext;
-    if (context == null) {
-      debugPrint('❌ No context available for showing call modal');
-      PresenceService().isHandlingIncomingCall = false;
-      return;
-    }
-
-    debugPrint('✅ Context available, proceeding with call setup');
     debugPrint(
-      '📞 Call details: senderId=$senderId, senderName=$senderName, callType=$callType, callId=$callId, callRoomId=$callRoomId',
+      '📞 Call tap: senderId=$senderId, senderName=$senderName, callType=$callType, callId=$callId, callRoomId=$callRoomId',
     );
 
-    // Initialize call service
-    final callService = CallService();
-    await callService.initialize();
-    debugPrint('✅ Call service initialized');
-
-    // Set up socket service and start signal buffering BEFORE handling incoming call
-    final socketService = SocketService();
-    socketService.startSignalBuffering();
-    debugPrint('📡 Started signal buffering for FCM call');
-
-    // Set up socket signal handler
-    socketService.onSignal = (signalData) {
-      debugPrint('📡 Signal received for FCM call: $signalData');
-      callService.handleSignal(signalData);
-    };
-
-    // For FCM notifications, request pending offer since the original offer
-    // may have been sent while the app was in background
-    if (callRoomId != null) {
-      debugPrint('📞 Requesting pending offer for FCM call: $callRoomId');
-      // Add a small delay to ensure socket connection is stable
-      Future.delayed(const Duration(milliseconds: 500), () {
-        socketService.emit('request_pending_offer', {'room': callRoomId});
-        debugPrint('📞 Pending offer request sent for room: $callRoomId');
-      });
-
-      // Also request a fresh offer as backup
-      Future.delayed(const Duration(milliseconds: 800), () {
-        debugPrint('📡 Requesting fresh WebRTC offer for FCM call (backup)');
-        socketService.emit('request_call_offer', {
-          'call_room_id': callRoomId,
-          'caller_id': senderId,
-        });
+    // Stash the incoming call so the caller's chat screen surfaces a SINGLE
+    // modal when we navigate into it. Previously this handler pushed its own
+    // modal AND the chat screen's deferred re-surface pushed another → the
+    // duplicate the user saw. Now the chat screen is the single owner.
+    if (callRoomId != null && callRoomId.isNotEmpty) {
+      PendingIncomingCallService().setPending({
+        'id': callId ?? DateTime.now().millisecondsSinceEpoch,
+        'call_room_id': callRoomId,
+        'call_type': callType,
+        'caller_id': senderId,
+        'caller': {
+          'id': senderId,
+          'username': senderName,
+          'full_name': senderName,
+        },
       });
     }
 
-    // Create call data for the call service
-    final callData = {
-      'id': callId ?? DateTime.now().millisecondsSinceEpoch,
-      'call_room_id':
-          callRoomId ??
-          '${senderId}_call_${DateTime.now().millisecondsSinceEpoch}',
-      'call_type': callType,
-      'caller_id': senderId,
-      'caller': {
-        'id': senderId,
-        'username': senderName,
-        'full_name': senderName,
-      },
-    };
-    debugPrint('📞 Created call data: $callData');
-    callService.handleIncomingCall(callData);
+    // Open the caller's chat FIRST: it joins the call room (via join_chat) and
+    // surfaces the single incoming-call modal through the deferred re-surface
+    // path in ChatScreen.initState.
+    openChatWithUser(senderId, senderName);
 
-    // Use addListener with unique key for proper event handling
-    const listenerKey = 'fcm_call_handler';
-    socketService.addListener('callEnded', listenerKey, (
-      Map<String, dynamic> endData,
-    ) {
-      debugPrint('📴 Call ended by remote user (FCM handler)');
-      callService.handleCallEnded();
-    });
-
-    socketService.addListener('callDeclined', listenerKey, (
-      Map<String, dynamic> declineData,
-    ) {
-      debugPrint('❌ Call declined (FCM handler)');
-      callService.handleCallDeclined();
-    });
-
-    // Show incoming call setup modal
-    debugPrint('📞 Attempting to show IncomingCallSetupModal');
-    navigatorKey.currentState
-        ?.push(
-          MaterialPageRoute(
-            fullscreenDialog: true,
-            builder: (context) => IncomingCallSetupModal(
-              callerName: senderName,
-              callerId: senderId,
-              callType: callType,
-              callService: callService,
-              onDecline: () {
-                debugPrint('📞 Call declined by user from FCM notification');
-                // Clean up listeners
-                socketService.removeListener('callEnded', listenerKey);
-                socketService.removeListener('callDeclined', listenerKey);
-                // Reset the handling flag
-                PresenceService().isHandlingIncomingCall = false;
-
-                // Navigate to chat with the caller when call is declined
-                // This provides better UX - user can see the chat context
-                debugPrint('📱 Navigating to chat with caller after decline');
-                _navigateToChat(senderId, senderName);
-              },
-            ),
-          ),
-        )
-        .then((result) {
-          debugPrint('📞 IncomingCallSetupModal closed with result: $result');
-          // Clean up listeners when modal closes
-          socketService.removeListener('callEnded', listenerKey);
-          socketService.removeListener('callDeclined', listenerKey);
-          // Reset the handling flag
-          PresenceService().isHandlingIncomingCall = false;
-
-          if (result is Map &&
-              (result['result'] == 'accepted' ||
-                  result['result'] == 'connected')) {
-            final localStream = result['localStream'];
-            debugPrint('📞 Call accepted, showing ConnectedCallScreen');
-            navigatorKey.currentState?.push(
-              MaterialPageRoute(
-                fullscreenDialog: true,
-                builder: (context) => ConnectedCallScreen(
-                  remoteName: senderName,
-                  callType: callType,
-                  callService: callService,
-                  localStream: localStream ?? callService.localStream,
-                ),
-              ),
-            );
-          } else {
-            // Call was declined or modal closed without accepting
-            // Navigate to chat with the caller for better UX
-            debugPrint(
-              '📱 Call declined/dismissed, navigating to chat with caller',
-            );
-            _navigateToChat(senderId, senderName);
-          }
-        });
+    // Ensure the socket is back up (we're returning from background) and pull
+    // the pending offer + buffered ICE so answering actually connects. The chat
+    // screen also requests these; duplicate requests are de-duped.
+    if (callRoomId != null && callRoomId.isNotEmpty) {
+      unawaited(
+        _requestPendingOfferWhenConnected(SocketService(), callRoomId, senderId),
+      );
+    }
   }
 
   /// Store notification data for later processing

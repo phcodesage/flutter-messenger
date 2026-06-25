@@ -846,6 +846,16 @@ class SocketService {
   bool get isConnected => _socket?.connected ?? false;
   int? get currentUserId => _currentUserId;
 
+  /// Proactively (re)connect the socket if it's not currently connected. Used
+  /// when returning from background (e.g. answering a call from an FCM tap),
+  /// where the connection may have dropped. Safe no-op if already connected.
+  void ensureConnected() {
+    if (_socket == null) return;
+    if (_socket!.connected) return;
+    debugPrint('🔌 ensureConnected: socket down, triggering connect()');
+    _socket!.connect();
+  }
+
   /// Test connection status
   void testConnection() {
     debugPrint('=== Socket Connection Test ===');
