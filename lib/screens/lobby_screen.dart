@@ -29,6 +29,8 @@ import 'sign_in_page.dart';
 import '../services/storage_service.dart';
 import '../config/api_config.dart';
 import '../services/presence_service.dart';
+import '../services/active_chat_service.dart';
+import '../services/pending_incoming_call_service.dart';
 import '../services/chat_cache_service.dart';
 import '../services/share_intent_service.dart';
 import '../services/shortcut_service.dart';
@@ -125,6 +127,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Rebuild the conversation list when a cross-room incoming call is deferred
+    // or cleared, so the ringing indicator on the caller's tile appears/clears.
+    PendingIncomingCallService().pending.addListener(
+      _onPendingIncomingCallChanged,
+    );
     _loadLobby();
     _loadAiSessionPresence();
     _loadAdminStatus();
@@ -1241,6 +1248,10 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   }
 
   /// Handle incoming call from another user
+  void _onPendingIncomingCallChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _handleIncomingCall(Map<String, dynamic> data) async {
     if (!mounted) return;
 
@@ -1279,6 +1290,21 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       PresenceService().isHandlingIncomingCall = false;
       return;
     }
+
+    // Cross-room guard: only pop the modal when the caller's own chat is open.
+    // Otherwise (on the lobby, in a group, or in a different 1-on-1 chat) defer
+    // it — the caller's tile glows with a ringing indicator and the modal is
+    // surfaced when the user opens that chat.
+    final activeUserId = ActiveChatService().activeUserId;
+    if (activeUserId != callerId) {
+      debugPrint(
+        '📲 Deferring incoming call from $callerId (active chat: $activeUserId)',
+      );
+      PendingIncomingCallService().setPending(data);
+      PresenceService().isHandlingIncomingCall = false;
+      return;
+    }
+    PendingIncomingCallService().clearIfMatches(callRoomId: callRoomId);
 
     // START buffering WebRTC signals immediately — before the async callService.initialize().
     // Previously this was triggered by the crossRoomCallOffer socket event, but we no longer
@@ -1906,6 +1932,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    PendingIncomingCallService().pending.removeListener(
+      _onPendingIncomingCallChanged,
+    );
     _searchController.removeListener(_onSearchQueryChanged);
     _searchDebounceTimer?.cancel();
     _searchController.dispose();
@@ -3752,6 +3781,15 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         otherUserId != null &&
         !PresenceService().isCallInProgress;
 
+    // A deferred cross-room incoming call is no longer answerable once it ends,
+    // is declined, or is accepted elsewhere — clear its ringing indicator.
+    if (isTerminal || isAcceptedForCurrentUserElsewhere) {
+      PendingIncomingCallService().clearIfMatches(
+        callRoomId: roomId.isEmpty ? null : roomId,
+        callerId: otherUserId,
+      );
+    }
+
     if (isAcceptedForCurrentUserElsewhere) {
       setState(() {
         _crossDeviceActiveCallRoomByUserId[otherUserId] = roomId;
@@ -3962,6 +4000,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final hasCrossDeviceCall = _crossDeviceActiveCallRoomByUserId.containsKey(
       user.id,
     );
+    // A cross-room incoming call from this user was deferred (it arrived while we
+    // were viewing another chat). Show a ringing indicator; tapping the tile
+    // opens the chat and surfaces the incoming-call modal.
+    final hasPendingIncomingCall =
+        PendingIncomingCallService().pendingCallerId == user.id;
     final isSelfChatTile = user.id == _socketService.currentUserId;
     final displayUnreadCount = isSelfChatTile ? 0 : user.unreadCount;
     // Highlight the conversation currently open in the desktop detail pane so the
@@ -3987,10 +4030,26 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         vertical: _cs(context, 4),
       ),
       decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFF2E2E5C) : const Color(0xFF252542),
+        color: hasPendingIncomingCall
+            ? const Color(0xFF3A2E1A)
+            : isSelected
+            ? const Color(0xFF2E2E5C)
+            : const Color(0xFF252542),
         borderRadius: BorderRadius.circular(_cs(context, 12)),
-        border: isSelected
+        border: hasPendingIncomingCall
+            ? Border.all(color: const Color(0xFFF59E0B), width: 2)
+            : isSelected
             ? Border.all(color: const Color(0xFF00D9FF), width: 1.5)
+            : null,
+        // Amber glow while an incoming call from this user is deferred.
+        boxShadow: hasPendingIncomingCall
+            ? [
+                BoxShadow(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.55),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ]
             : null,
       ),
       child: Material(
@@ -4152,13 +4211,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                       SizedBox(height: _cs(context, 2)),
                       // Online/Away/Offline status with relative time
                       Text(
-                        hasCrossDeviceCall
+                        hasPendingIncomingCall
+                            ? '📞 Incoming call…'
+                            : hasCrossDeviceCall
                             ? 'In call on another device'
                             : effectiveStatus == 'online'
                             ? 'Online'
                             : _formatRelativeTime(user.lastSeen),
                         style: TextStyle(
-                          color: hasCrossDeviceCall
+                          color: hasPendingIncomingCall
+                              ? const Color(0xFFF59E0B)
+                              : hasCrossDeviceCall
                               ? const Color(0xFFF59E0B)
                               : effectiveStatus == 'online'
                               ? const Color(0xFF00E676)
@@ -4166,6 +4229,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                               ? const Color(0xFFFFC107)
                               : Colors.grey[500],
                           fontSize: 13 * s,
+                          fontWeight: hasPendingIncomingCall
+                              ? FontWeight.w600
+                              : FontWeight.normal,
                         ),
                       ),
                       SizedBox(height: _cs(context, 2)),

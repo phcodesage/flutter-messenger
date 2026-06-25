@@ -28,6 +28,13 @@ class NotificationHandler {
   /// Check if there's a pending notification waiting for lobby
   static bool get hasPendingNavigation => _pendingNotificationData != null;
 
+  /// Open the 1-on-1 chat with [userId]. Public entry point used to answer a
+  /// deferred incoming call by navigating into the caller's conversation (the
+  /// chat screen then surfaces the deferred incoming-call modal).
+  static void openChatWithUser(int userId, String userName) {
+    _navigateToChat(userId, userName);
+  }
+
   /// Get and clear pending notification data
   static Map<String, dynamic>? getPendingNotificationData() {
     debugPrint('🔍 getPendingNotificationData called');

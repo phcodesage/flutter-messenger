@@ -38,6 +38,8 @@ import '../services/link_preview_service.dart';
 import '../widgets/color_picker_modal.dart';
 import '../widgets/common_phrase_bar.dart';
 import '../services/active_chat_service.dart';
+import '../services/pending_incoming_call_service.dart';
+import '../utils/notification_handler.dart';
 import '../widgets/call_setup_modal.dart';
 import '../widgets/outgoing_call_modal.dart';
 import '../widgets/incoming_call_setup_modal.dart';
@@ -443,6 +445,19 @@ class _ChatScreenState extends State<ChatScreen>
 
     // Set this user as active to prevent FCM notifications
     ActiveChatService().setActiveUser(widget.otherUser.id);
+
+    // If an incoming call from this user was deferred while we were viewing a
+    // different conversation, surface its modal now that we're in the caller's
+    // room so the answer routes to the correct room.
+    final deferredCall = PendingIncomingCallService().takeForCaller(
+      widget.otherUser.id,
+    );
+    if (deferredCall != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _handleIncomingCallInChat(deferredCall, requestOffer: true);
+      });
+    }
 
     _initialize();
     // Periodically refresh "last seen" relative label in header (like the web app does)
@@ -2526,8 +2541,49 @@ class _ChatScreenState extends State<ChatScreen>
         });
   }
 
-  /// Handle incoming call while in chat screen
-  Future<void> _handleIncomingCallInChat(Map<String, dynamic> data) async {
+  /// Show a non-intrusive in-chat banner when an incoming call from a DIFFERENT
+  /// user arrives while this chat is open. Tapping "Answer" opens the caller's
+  /// chat, where the deferred incoming-call modal is surfaced.
+  void _showDeferredIncomingCallBanner(String callerName, int callerId) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 45),
+        backgroundColor: const Color(0xFF1F2937),
+        content: Row(
+          children: [
+            const Icon(Icons.phone_in_talk, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '📞 Incoming call from $callerName',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'Answer',
+          textColor: const Color(0xFFF59E0B),
+          onPressed: () {
+            messenger.hideCurrentSnackBar();
+            NotificationHandler.openChatWithUser(callerId, callerName);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Handle incoming call while in chat screen.
+  ///
+  /// [requestOffer] is set when re-surfacing a previously deferred call (the
+  /// original offer signal was dropped while deferred, so we re-request it).
+  Future<void> _handleIncomingCallInChat(
+    Map<String, dynamic> data, {
+    bool requestOffer = false,
+  }) async {
     if (!mounted) return;
 
     if (_callInProgressOnOtherDevice) {
@@ -2572,6 +2628,23 @@ class _ChatScreenState extends State<ChatScreen>
       return;
     }
 
+    // Cross-room guard: if the caller is NOT the conversation we're viewing,
+    // don't pop the modal over the wrong room (answering would route to this
+    // chat's room, not the caller's, and break the call). Defer it - the lobby
+    // shows a ringing indicator and we show an in-chat banner; the modal is
+    // surfaced when the user opens the caller's chat (see initState). Skipped
+    // when re-surfacing a deferred call (requestOffer), where caller == peer.
+    if (!requestOffer && callerId != widget.otherUser.id) {
+      debugPrint(
+        '📲 Deferring incoming call from $callerId while viewing ${widget.otherUser.id}',
+      );
+      PendingIncomingCallService().setPending(data);
+      PresenceService().isHandlingIncomingCall = false;
+      _showDeferredIncomingCallBanner(callerName, callerId);
+      return;
+    }
+    PendingIncomingCallService().clearIfMatches(callRoomId: callRoomId);
+
     // START buffering WebRTC signals immediately â€” before the async callService.initialize().
     _socketService.startSignalBuffering();
 
@@ -2604,6 +2677,13 @@ class _ChatScreenState extends State<ChatScreen>
       debugPrint('ðŸ“¡ Signal received for incoming call: $signalData');
       callService.handleSignal(signalData);
     };
+
+    // Re-surfacing a deferred call: the original offer signal was dropped while
+    // deferred, so ask the server to resend it now that the handler is wired.
+    if (requestOffer) {
+      debugPrint('📞 Requesting pending offer for deferred call: $callRoomId');
+      _socketService.emit('request_pending_offer', {'room': callRoomId});
+    }
 
     // Use keyed listeners for call ended/declined handlers to avoid overwriting
     const callListenerKey = 'chat_incoming_call';

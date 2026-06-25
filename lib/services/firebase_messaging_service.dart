@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'background_update_service.dart';
 import 'fcm_service.dart';
 import 'active_chat_service.dart';
+import 'pending_incoming_call_service.dart';
 import 'storage_service.dart';
 import 'version_service.dart';
 import '../config/api_config.dart';
@@ -719,10 +720,47 @@ class FirebaseMessagingService {
         // a heads-up notification so the user sees a banner even when the app is open.
         final data = message.data;
         if (data['type'] == 'call') {
-          debugPrint(
-            '📞 Foreground call notification - triggering call handler + showing banner',
-          );
-          _handleNotificationTap(data);
+          final senderId = int.tryParse(data['sender_id']?.toString() ?? '');
+          final activeUserId = ActiveChatService().activeUserId;
+          // Only pop the modal when the caller's own chat is open; otherwise
+          // (lobby, group, or a different chat) defer it.
+          final inCallerChat = activeUserId != null &&
+              senderId != null &&
+              activeUserId == senderId;
+          if (!inCallerChat) {
+            // Cross-room guard: don't pop the full-screen call modal over a
+            // DIFFERENT conversation than the caller. Defer it — the socket
+            // 'incomingCall' path shows the in-chat banner, and the lobby tile
+            // shows a ringing indicator (we stash the offer here too in case the
+            // socket isn't connected). The modal is surfaced when the user opens
+            // the caller's chat. The heads-up notification still shows below.
+            debugPrint(
+              '📲 Foreground call from $senderId while viewing $activeUserId — deferring modal',
+            );
+            // Only stash if the FCM payload carries a room; otherwise rely on the
+            // socket 'incomingCall' path (which has the authoritative room) so we
+            // don't clobber a good pending entry with a null room.
+            final callRoom = data['call_room_id'];
+            if (callRoom is String && callRoom.isNotEmpty) {
+              PendingIncomingCallService().setPending({
+                'id': int.tryParse(data['call_id']?.toString() ?? '') ??
+                    DateTime.now().millisecondsSinceEpoch,
+                'call_room_id': callRoom,
+                'call_type': data['call_type'] ?? 'video',
+                'caller_id': senderId,
+                'caller': {
+                  'id': senderId,
+                  'username': data['sender_name'] ?? 'Unknown',
+                  'full_name': data['sender_name'] ?? 'Unknown',
+                },
+              });
+            }
+          } else {
+            debugPrint(
+              '📞 Foreground call notification - triggering call handler + showing banner',
+            );
+            _handleNotificationTap(data);
+          }
           // Fall through to showNotification so a banner is displayed
         }
 
