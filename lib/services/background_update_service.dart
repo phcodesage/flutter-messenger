@@ -4,10 +4,12 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'storage_service.dart';
@@ -61,8 +63,6 @@ class InAppUpdatePrompt {
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
-const int _updateAvailableNotificationId =
-    9001; // reuse the existing app_update channel id slot
 const int _downloadProgressNotificationId = 9002;
 const int _readyToInstallNotificationId = 9003;
 const String _updateDownloadChannelId = 'app_update_download';
@@ -71,6 +71,10 @@ const String _updateDownloadChannelName = 'App Update Download';
 const String _prefApkPath = 'bg_update_apk_path';
 const String _prefApkVersion = 'bg_update_apk_version';
 const String _prefApkBuild = 'bg_update_apk_build';
+// Set when the user taps the "ready to install" notification. Consumed on the
+// next foreground so the installer launches from an Activity context even when
+// the tap was handled by a background isolate.
+const String _prefInstallRequested = 'bg_update_install_requested';
 
 /// WhatsApp-style background download service for app updates.
 ///
@@ -114,6 +118,12 @@ class BackgroundUpdateService {
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
+
+  /// Bridge to the native foreground service that keeps the process alive (and
+  /// the download running) while the app is backgrounded.
+  static const MethodChannel _downloadServiceChannel = MethodChannel(
+    'com.example.flutter_messenger_v2/update_download',
+  );
 
   bool _notificationsInitialized = false;
   CancelToken? _cancelToken;
@@ -291,7 +301,10 @@ class BackgroundUpdateService {
       progress: 0,
       versionInfo: info,
     );
-    await _showDownloadProgressNotification(info, 0);
+    // Promote to a foreground service so the OS keeps the process (and this
+    // download) alive while the app is backgrounded. The service owns the
+    // progress notification, so we don't post a separate local one.
+    await _startDownloadService(info, 0);
 
     _cancelToken = CancelToken();
 
@@ -309,105 +322,107 @@ class BackgroundUpdateService {
   }
 
   /// Launch the Android package installer for the downloaded APK.
+  ///
+  /// Resolves the APK from the live state or, if that's empty (e.g. a fresh
+  /// isolate), from the persisted path. Ensures the "install unknown apps"
+  /// permission is granted first — without it Android silently refuses to open
+  /// the package installer.
   Future<void> launchInstaller() async {
-    final current = state.value;
-    if (current.status != BackgroundUpdateStatus.readyToInstall ||
-        current.apkPath == null) {
-      _log('launchInstaller called but no APK is ready.');
+    String? apkPath = state.value.apkPath;
+    if (apkPath == null || apkPath.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      apkPath = prefs.getString(_prefApkPath);
+    }
+
+    if (apkPath == null || apkPath.isEmpty || !File(apkPath).existsSync()) {
+      _log('launchInstaller called but no APK is available.');
       return;
     }
 
-    _log('Launching installer for ${current.apkPath}');
+    if (Platform.isAndroid && !await _ensureInstallPermission()) {
+      _log('Install permission not granted — keeping request pending.');
+      return;
+    }
+
+    _log('Launching installer for $apkPath');
     final result = await OpenFilex.open(
-      current.apkPath!,
+      apkPath,
       type: 'application/vnd.android.package-archive',
     );
 
-    if (result.type != ResultType.done) {
+    if (result.type == ResultType.done) {
+      await _clearInstallRequested();
+    } else {
       _log('Installer launch failed: ${result.message}');
     }
   }
 
+  /// Record that the user asked to install (e.g. tapped the notification) and
+  /// attempt the launch immediately. The launch only succeeds from a foreground
+  /// Activity, so the persisted flag lets [consumePendingInstall] retry on the
+  /// next foreground if this was handled in a background isolate.
+  Future<void> requestInstall() async {
+    await _markInstallRequested();
+    await launchInstaller();
+  }
+
+  /// Called on app foreground/startup: if an install was requested from a
+  /// notification, launch the installer now that an Activity context exists.
+  Future<void> consumePendingInstall() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_prefInstallRequested) != true) return;
+      _log('Consuming pending install request.');
+      await launchInstaller();
+    } catch (e) {
+      _log('consumePendingInstall failed: $e');
+    }
+  }
+
+  Future<bool> _ensureInstallPermission() async {
+    try {
+      final status = await Permission.requestInstallPackages.status;
+      if (status.isGranted) return true;
+      final requested = await Permission.requestInstallPackages.request();
+      return requested.isGranted;
+    } catch (e) {
+      _log('Install permission check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _markInstallRequested() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefInstallRequested, true);
+    } catch (_) {}
+  }
+
+  Future<void> _clearInstallRequested() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefInstallRequested);
+    } catch (_) {}
+  }
+
   // ── Update-available notification (WhatsApp-style prompt) ──────────────────
 
-  /// Shows an "Update available" notification with [Download Now] and [Later]
-  /// action buttons WITHOUT starting the download.
+  /// Manual-mode entry point: surfaces an "Update available" prompt **inside the
+  /// app only** (no "Download Now / Later" system notification).
   ///
-  /// The download only begins when the user explicitly taps [Download Now].
-  /// Tapping [Later] saves the payload so the lobby badge stays visible.
+  /// Used when the user has turned Automatic Updates off — they choose to
+  /// download from the in-app dialog every time the app is opened. In auto mode
+  /// callers use [startBackgroundDownload] instead and this is never invoked.
   Future<void> notifyUpdateAvailable(
     AppVersionInfo info,
     String downloadUrl,
   ) async {
-    if (!Platform.isAndroid) {
-      _log(
-        'notifyUpdateAvailable is Android-only — skipping on ${Platform.operatingSystem}.',
-      );
-      return;
-    }
-
-    await _ensureNotificationsInitialized();
-
-    final version = info.version;
-    final androidDetails = AndroidNotificationDetails(
-      'app_update',
-      'App Updates',
-      channelDescription: 'Notifications for app version updates',
-      importance: Importance.high,
-      priority: Priority.high,
-      ongoing: false,
-      autoCancel: true,
-      icon: '@mipmap/ic_launcher',
-      actions: const <AndroidNotificationAction>[
-        AndroidNotificationAction(
-          'update_now',
-          'Download Now',
-          showsUserInterface: false,
-          cancelNotification: true,
-        ),
-        AndroidNotificationAction(
-          'update_later',
-          'Later',
-          showsUserInterface: false,
-          cancelNotification: true,
-        ),
-      ],
-    );
-
-    const iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    final payload = jsonEncode(<String, dynamic>{
-      'type': 'app_update',
-      'version': info.version,
-      'build_number': info.buildNumber,
-      'download_url': downloadUrl,
-      'force_update': info.forceUpdate,
-      'release_notes': info.releaseNotes,
-    });
-
-    final body = info.releaseNotes.isNotEmpty
-        ? info.releaseNotes
-        : 'Tap Download Now to update — or Later to remind you.';
-
-    await _localNotifications.show(
-      _updateAvailableNotificationId,
-      'Update available: v$version',
-      body,
-      NotificationDetails(android: androidDetails, iOS: iosDetails),
-      payload: payload,
-    );
-
-    // Also fire the in-app prompt so the lobby screen can show a SnackBar
+    // Fire the in-app prompt so the lobby screen can show its update dialog.
     pendingInAppPrompt.value = InAppUpdatePrompt(
       info: info,
       downloadUrl: downloadUrl,
     );
-
-    _log('Showed update-available notification for v$version.');
+    _log('Surfaced in-app update prompt for v${info.version}.');
   }
 
   // ── Internal download logic ────────────────────────────────────────────────
@@ -458,11 +473,11 @@ class BackgroundUpdateService {
             versionInfo: info,
           );
 
-          // Throttle notification updates to every 5%
+          // Throttle foreground-service notification updates to every 5%
           final percent = (progress * 100).truncate();
           if (percent != lastNotifPercent && percent % 5 == 0) {
             lastNotifPercent = percent;
-            unawaited(_showDownloadProgressNotification(info, progress));
+            unawaited(_startDownloadService(info, percent));
           }
         },
       );
@@ -491,7 +506,6 @@ class BackgroundUpdateService {
         versionInfo: info,
       );
 
-      await _cancelDownloadNotification();
       await _showReadyToInstallNotification(info);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
@@ -502,13 +516,38 @@ class BackgroundUpdateService {
       state.value = BackgroundUpdateState.failed(
         errorMessage: 'Download failed: ${e.message}',
       );
-      await _cancelDownloadNotification();
     } catch (e) {
       _log('Download failed: $e');
       state.value = BackgroundUpdateState.failed(
         errorMessage: 'Download failed: $e',
       );
-      await _cancelDownloadNotification();
+    } finally {
+      // Always tear down the foreground service when the download ends.
+      await _stopDownloadService();
+    }
+  }
+
+  // ── Foreground-service bridge ──────────────────────────────────────────────
+
+  Future<void> _startDownloadService(AppVersionInfo info, int percent) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _downloadServiceChannel.invokeMethod<void>('start', {
+        'title': 'Downloading update v${info.version}',
+        'text': percent > 0 ? '$percent%' : 'Starting…',
+        'progress': percent,
+      });
+    } catch (e) {
+      _log('Failed to start download foreground service: $e');
+    }
+  }
+
+  Future<void> _stopDownloadService() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _downloadServiceChannel.invokeMethod<void>('stop');
+    } catch (e) {
+      _log('Failed to stop download foreground service: $e');
     }
   }
 
@@ -559,52 +598,13 @@ class BackgroundUpdateService {
       await prefs.remove(_prefApkPath);
       await prefs.remove(_prefApkVersion);
       await prefs.remove(_prefApkBuild);
+      await prefs.remove(_prefInstallRequested);
     } catch (e) {
       _log('Failed to clear persisted APK: $e');
     }
   }
 
   // ── Notification helpers ───────────────────────────────────────────────────
-
-  Future<void> _showDownloadProgressNotification(
-    AppVersionInfo info,
-    double progress,
-  ) async {
-    await _ensureNotificationsInitialized();
-    final percent = (progress * 100).truncate();
-    final title = 'Downloading update v${info.version}';
-    final body = '$percent% — tap to view';
-
-    final androidDetails = AndroidNotificationDetails(
-      _updateDownloadChannelId,
-      _updateDownloadChannelName,
-      channelDescription: 'App update download progress',
-      importance: Importance.low,
-      priority: Priority.low,
-      ongoing: true,
-      autoCancel: false,
-      showProgress: true,
-      maxProgress: 100,
-      progress: percent,
-      indeterminate: percent == 0,
-      icon: '@mipmap/ic_launcher',
-      onlyAlertOnce: true,
-      playSound: false,
-      enableVibration: false,
-    );
-
-    await _localNotifications.show(
-      _downloadProgressNotificationId,
-      title,
-      body,
-      NotificationDetails(android: androidDetails),
-      payload: jsonEncode(<String, dynamic>{
-        'type': 'app_update_progress',
-        'version': info.version,
-        'build_number': info.buildNumber,
-      }),
-    );
-  }
 
   Future<void> _cancelDownloadNotification() async {
     try {
@@ -696,8 +696,8 @@ class BackgroundUpdateService {
           // Keep APK ready but don't install yet
           return;
         }
-        // 'install_now' or body tap → launch installer
-        unawaited(launchInstaller());
+        // 'install_now' or body tap → launch installer (with foreground retry)
+        unawaited(requestInstall());
       }
     } catch (e) {
       debugPrint(

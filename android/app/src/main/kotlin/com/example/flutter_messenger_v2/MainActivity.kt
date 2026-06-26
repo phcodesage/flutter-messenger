@@ -316,6 +316,49 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // ── App-update download foreground service channel ─────────────────
+        // Keeps the process alive so an OTA APK download survives backgrounding.
+        val updateDownloadChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.flutter_messenger_v2/update_download",
+        )
+        updateDownloadChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    try {
+                        val title = call.argument<String>("title") ?: "Downloading update"
+                        val text = call.argument<String>("text") ?: ""
+                        val progress = call.argument<Int>("progress") ?: -1
+                        val serviceIntent = Intent(this, UpdateDownloadService::class.java).apply {
+                            action = UpdateDownloadService.ACTION_START
+                            putExtra("title", title)
+                            putExtra("text", text)
+                            putExtra("progress", progress)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error starting update download service: ${e.message}", e)
+                        result.error("UPDATE_FGS_ERROR", e.message, null)
+                    }
+                }
+                "stop" -> {
+                    try {
+                        stopService(Intent(this, UpdateDownloadService::class.java))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error stopping update download service: ${e.message}", e)
+                        result.error("UPDATE_FGS_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // ── Native quick-reply notification bridge ───────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, QUICK_REPLY_CHANNEL)
             .setMethodCallHandler { call, result ->

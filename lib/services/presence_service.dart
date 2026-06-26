@@ -6,6 +6,8 @@ import '../config/api_config.dart';
 import 'storage_service.dart';
 import 'auth_error_handler.dart';
 import 'active_chat_service.dart';
+import 'version_service.dart';
+import '../utils/notification_handler.dart';
 
 /// Service for managing user presence and heartbeat.
 ///
@@ -160,6 +162,14 @@ class PresenceService with WidgetsBindingObserver {
       }
 
       debugPrint('💓 Heartbeat sent');
+
+      // Piggyback a (throttled) app-version check on the heartbeat so a new
+      // release is picked up while the app stays open, not only on next launch.
+      unawaited(
+        VersionService().checkAndPromptUpdate(
+          NotificationHandler.navigatorKey.currentContext,
+        ),
+      );
     } catch (e) {
       debugPrint('Heartbeat error: $e');
     }

@@ -174,6 +174,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     // matching the web app.
     if (state == AppLifecycleState.resumed) {
       _resyncLobbyOrder('app resumed');
+      // Check for a new app version on every foreground/open (forced past the
+      // passive throttle). Auto-update preference decides what happens next.
+      unawaited(
+        VersionService().checkAndPromptUpdate(
+          NotificationHandler.navigatorKey.currentContext,
+          force: true,
+        ),
+      );
+      // If the user tapped "Install Now" while we were backgrounded, launch the
+      // installer now that an Activity context is available.
+      unawaited(BackgroundUpdateService().consumePendingInstall());
     }
   }
 
@@ -2049,7 +2060,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final String? aiLastMessageTime = prefs.getString('ai_last_message_time_$userId');
+    final String? aiLastMessageTime = prefs.getString(
+      'ai_last_message_time_$userId',
+    );
     final String? aiLastMessagePreview = prefs.getString(
       'ai_last_message_preview_$userId',
     );
@@ -3450,7 +3463,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                     PopupMenuItem<String>(
                       value: 'settings',
                       child: Text(
-                        'Timestamp settings',
+                        'Settings',
                         style: TextStyle(color: Colors.white),
                       ),
                     ),

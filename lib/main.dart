@@ -174,8 +174,13 @@ Future<void> _bootstrapAppServices() async {
       }
     }
 
-    // Restore any APK that was fully downloaded in a previous session
-    unawaited(BackgroundUpdateService().restorePersistedState());
+    // Restore any APK that was fully downloaded in a previous session, then
+    // honour a pending "Install Now" tap that arrived while the app was closed.
+    unawaited(
+      BackgroundUpdateService().restorePersistedState().then(
+        (_) => BackgroundUpdateService().consumePendingInstall(),
+      ),
+    );
 
     unawaited(FirebaseMessagingService.instance.checkInitialMessage());
   } catch (e) {

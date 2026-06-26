@@ -95,76 +95,10 @@ bool _isAppUpdateType(Map<String, dynamic> data) {
   return data['type']?.toString().toLowerCase() == 'app_update';
 }
 
-bool _parseBool(dynamic value) {
-  if (value is bool) return value;
-  return value?.toString().toLowerCase() == 'true';
-}
-
 String _readActionId(Map<String, dynamic> data, String key, String fallback) {
   final value = data[key]?.toString().trim();
   if (value == null || value.isEmpty) return fallback;
   return value;
-}
-
-String _appUpdateBody(Map<String, dynamic> data, bool isForced) {
-  final releaseNotes = data['release_notes']?.toString().trim() ?? '';
-  if (releaseNotes.isNotEmpty) {
-    return releaseNotes;
-  }
-
-  return isForced ? 'This update is required.' : 'Update now or update later.';
-}
-
-Future<void> _showAppUpdateNotification(
-  FlutterLocalNotificationsPlugin localNotifications,
-  Map<String, dynamic> data,
-) async {
-  final isForced = _parseBool(data['force_update']);
-  final version = data['version']?.toString().trim();
-
-  final title = (version != null && version.isNotEmpty)
-      ? 'Update available: v$version'
-      : 'Update available';
-
-  final androidDetails = AndroidNotificationDetails(
-    _appUpdateChannelId,
-    _appUpdateChannelName,
-    channelDescription: 'Notifications for app version updates',
-    importance: Importance.high,
-    priority: Priority.high,
-    ongoing: isForced,
-    autoCancel: !isForced,
-    icon: '@mipmap/ic_launcher',
-    actions: <AndroidNotificationAction>[
-      const AndroidNotificationAction(
-        'update_now',
-        'Download Now',
-        showsUserInterface: false,
-        cancelNotification: true,
-      ),
-      if (!isForced)
-        const AndroidNotificationAction(
-          'update_later',
-          'Later',
-          showsUserInterface: false,
-          cancelNotification: true,
-        ),
-    ],
-  );
-
-  const iosDetails = DarwinNotificationDetails(
-    presentAlert: true,
-    presentBadge: true,
-    presentSound: true,
-  );
-
-  await localNotifications.show(
-    _appUpdateNotificationId,
-    title,
-    _appUpdateBody(data, isForced),
-    NotificationDetails(android: androidDetails, iOS: iosDetails),
-    payload: jsonEncode(data),
-  );
 }
 
 int _buildChatNotificationId(Map<String, dynamic> data) {
@@ -465,15 +399,13 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   if (_isAppUpdateType(data)) {
-    // When FCM already carries a notification payload, Android may render it
-    // natively. Skip local rendering in background isolate to avoid duplicates.
-    if (message.notification != null) {
-      debugPrint(
-        '📲 App update notification already provided by FCM payload; skipping local duplicate.',
-      );
-      return;
-    }
-    await _showAppUpdateNotification(localNotifications, data);
+    // No "Download Now / Later" notification. We can't reliably download a large
+    // APK from a short-lived background isolate, so do nothing here — the next
+    // app open / heartbeat version check downloads it silently (auto mode) or
+    // surfaces the in-app prompt (manual mode).
+    debugPrint(
+      '📲 Background app_update received — deferring to next foreground version check.',
+    );
     return;
   }
 
@@ -724,7 +656,8 @@ class FirebaseMessagingService {
           final activeUserId = ActiveChatService().activeUserId;
           // Only pop the modal when the caller's own chat is open; otherwise
           // (lobby, group, or a different chat) defer it.
-          final inCallerChat = activeUserId != null &&
+          final inCallerChat =
+              activeUserId != null &&
               senderId != null &&
               activeUserId == senderId;
           if (!inCallerChat) {
@@ -743,7 +676,8 @@ class FirebaseMessagingService {
             final callRoom = data['call_room_id'];
             if (callRoom is String && callRoom.isNotEmpty) {
               PendingIncomingCallService().setPending({
-                'id': int.tryParse(data['call_id']?.toString() ?? '') ??
+                'id':
+                    int.tryParse(data['call_id']?.toString() ?? '') ??
                     DateTime.now().millisecondsSinceEpoch,
                 'call_room_id': callRoom,
                 'call_type': data['call_type'] ?? 'video',
@@ -989,7 +923,13 @@ class FirebaseMessagingService {
     Map<String, dynamic> data = message.data;
 
     if (_isAppUpdateType(data)) {
-      await _showAppUpdateNotification(_localNotifications, data);
+      // No "Download Now / Later" notification. Hand off to VersionService,
+      // which downloads silently in the background when Automatic Updates are
+      // on, or surfaces the in-app prompt when the user has them off.
+      await VersionService().promptUpdateFromPush(
+        NotificationHandler.navigatorKey.currentContext,
+        data,
+      );
       return;
     }
 
@@ -1130,6 +1070,14 @@ class FirebaseMessagingService {
 
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
+
+      // "Ready to install" notification tap / "Install Now" action. This is the
+      // handler that actually receives the tap (foreground and background), so
+      // launching the installer from here is what makes install work.
+      if (data['type']?.toString() == 'app_update_ready') {
+        await BackgroundUpdateService().requestInstall();
+        return;
+      }
 
       if (_isAppUpdateType(data)) {
         await _handleAppUpdateResponse(data, response.actionId);
@@ -1382,6 +1330,13 @@ class FirebaseMessagingService {
           // Regular notification tap: store as pending until lobby is mounted.
           try {
             final data = jsonDecode(payload) as Map<String, dynamic>;
+
+            // App opened by tapping "Install Now" on the ready-to-install
+            // notification from a terminated state — launch the installer.
+            if (data['type']?.toString() == 'app_update_ready') {
+              await BackgroundUpdateService().requestInstall();
+              return;
+            }
 
             // Preserve app-update action semantics on cold start.
             // In particular, "update later" should not open the update prompt.

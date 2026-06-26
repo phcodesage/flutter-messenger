@@ -39,7 +39,10 @@
     
     <!-- Ongoing call notification (foreground service) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
-    
+
+    <!-- Keep the app-update APK download alive while the app is backgrounded -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+
     <!-- Hardware features for calling -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
@@ -173,6 +176,12 @@
         <service
             android:name="com.cloudwebrtc.webrtc.FlutterWebRTCForegroundService"
             android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
+
+        <!-- App-update download foreground service (keeps OTA downloads running in background) -->
+        <service
+            android:name=".UpdateDownloadService"
+            android:foregroundServiceType="dataSync"
             android:exported="false" />
 
         <!-- Native inline reply receiver for chat notifications -->

@@ -78,10 +78,12 @@ class ApkDownloader {
     final tempDir = await getTemporaryDirectory();
     final safeVersion = version.replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');
     final buildSuffix = buildNumber > 0 ? '_build$buildNumber' : '';
-    final outputPath = '${tempDir.path}/flask_call_app_$safeVersion$buildSuffix.apk';
+    final outputPath =
+        '${tempDir.path}/flask_call_app_$safeVersion$buildSuffix.apk';
 
     final headers = <String, String>{
-      'Accept': 'application/vnd.android.package-archive,application/octet-stream,*/*',
+      'Accept':
+          'application/vnd.android.package-archive,application/octet-stream,*/*',
     };
     if (authToken != null && authToken.isNotEmpty) {
       headers['Authorization'] = 'Bearer $authToken';
@@ -96,13 +98,17 @@ class ApkDownloader {
         headers: headers,
         followRedirects: true,
         maxRedirects: 5,
-        validateStatus: (status) => status != null && status >= 200 && status < 400,
+        validateStatus: (status) =>
+            status != null && status >= 200 && status < 400,
       ),
     );
 
     final bytes = response.data ?? const <int>[];
-    final contentType = response.headers.value(Headers.contentTypeHeader) ?? 'unknown';
-    onLog?.call('Download response: status=${response.statusCode}, content-type=$contentType, bytes=${bytes.length}');
+    final contentType =
+        response.headers.value(Headers.contentTypeHeader) ?? 'unknown';
+    onLog?.call(
+      'Download response: status=${response.statusCode}, content-type=$contentType, bytes=${bytes.length}',
+    );
 
     if (bytes.length < 4 ||
         bytes[0] != 0x50 ||
@@ -152,13 +158,17 @@ class VersionService {
 
   static final ValueNotifier<int> deferredUpdateSignal = ValueNotifier<int>(0);
 
-  static const String _deferredUpdatePayloadKey =
-      'deferred_app_update_payload';
+  static const String _deferredUpdatePayloadKey = 'deferred_app_update_payload';
 
   bool _isChecking = false;
   bool _dialogVisible = false;
   DateTime? _lastVersionCheckTime;
-  static const Duration _minVersionCheckInterval = Duration(minutes: 15);
+  // Throttle for the passive path (heartbeat / periodic). Kept short so a new
+  // release is picked up within a few minutes while the app stays open.
+  static const Duration _minVersionCheckInterval = Duration(minutes: 5);
+  // Minimal debounce for forced checks (app open / "Check now" button) so rapid
+  // foreground/background cycling can't hammer the version endpoint.
+  static const Duration _minForcedCheckInterval = Duration(seconds: 15);
   String? _lastPromptedVersion;
 
   void _log(String message) {
@@ -267,7 +277,7 @@ class VersionService {
   /// - If [force_update] is true: shows the blocking [UpdateDialog] as before.
   /// - Otherwise: silently starts a background download via [BackgroundUpdateService].
   Future<void> promptUpdateFromPush(
-    BuildContext context,
+    BuildContext? context,
     Map<String, dynamic> payload,
   ) async {
     try {
@@ -301,7 +311,7 @@ class VersionService {
 
       // Force update: show blocking dialog as before
       if (info.forceUpdate) {
-        if (!context.mounted) return;
+        if (context == null || !context.mounted) return;
         if (_dialogVisible) return;
         _dialogVisible = true;
         await showDialog<void>(
@@ -321,9 +331,9 @@ class VersionService {
         return;
       }
 
-      // Non-forced: show notification, let user decide to download
-      _log('Showing update-available notification for v${info.version}.');
-      await BackgroundUpdateService().notifyUpdateAvailable(
+      // Non-forced: always download silently in the background.
+      _log('Starting silent background download for v${info.version}.');
+      await BackgroundUpdateService().startBackgroundDownload(
         info,
         resolvedDownloadUrl,
       );
@@ -339,7 +349,13 @@ class VersionService {
   /// - **force_update = true** → shows the blocking [UpdateDialog] (context required).
   /// - **force_update = false** → silently starts a background download via
   ///   [BackgroundUpdateService]; no dialog is shown.
-  Future<void> checkAndPromptUpdate(BuildContext? context) async {
+  ///
+  /// Pass [force] = true for user-driven checks (app open / "Check now") to
+  /// bypass the passive throttle; it still applies a short debounce.
+  Future<void> checkAndPromptUpdate(
+    BuildContext? context, {
+    bool force = false,
+  }) async {
     if (_isChecking) {
       _log('Skipped check: another check is already running.');
       return;
@@ -348,10 +364,14 @@ class VersionService {
       _log('Skipped check: update dialog is already visible.');
       return;
     }
+    final interval = force ? _minForcedCheckInterval : _minVersionCheckInterval;
     if (_lastVersionCheckTime != null &&
-        DateTime.now().difference(_lastVersionCheckTime!) <
-            _minVersionCheckInterval) {
-      _log('Skipped check: version check was performed recently.');
+        DateTime.now().difference(_lastVersionCheckTime!) < interval) {
+      _log(
+        force
+            ? 'Skipped forced check: a check ran moments ago.'
+            : 'Skipped check: version check was performed recently.',
+      );
       return;
     }
 
@@ -412,7 +432,9 @@ class VersionService {
           await BackgroundUpdateService().clearStaleState();
           await clearDeferredUpdatePayload();
         } else {
-          _log('Keeping existing background update state while install is pending.');
+          _log(
+            'Keeping existing background update state while install is pending.',
+          );
         }
         return;
       }
@@ -447,9 +469,11 @@ class VersionService {
         return;
       }
 
-      // ── Normal update: show notification so user can choose ────────────────────────
-      _log('Notifying user of available update v${info.version} (user-choice download).');
-      await BackgroundUpdateService().notifyUpdateAvailable(
+      // ── Normal update: always download silently in the background ─────────
+      // The user is never prompted — they only see the install badge + a
+      // "ready to install" notification once the download finishes.
+      _log('Starting silent background download for v${info.version}.');
+      await BackgroundUpdateService().startBackgroundDownload(
         info,
         resolvedDownloadUrl,
       );
@@ -503,7 +527,9 @@ class VersionService {
 
   List<int> _extractVersionParts(String version) {
     final matches = RegExp(r'\d+').allMatches(version);
-    final parts = matches.map((m) => int.tryParse(m.group(0) ?? '0') ?? 0).toList();
+    final parts = matches
+        .map((m) => int.tryParse(m.group(0) ?? '0') ?? 0)
+        .toList();
     if (parts.isEmpty) return <int>[0];
     return parts;
   }
@@ -570,7 +596,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
     try {
       final authToken = await StorageService.getToken();
-      debugPrint('[VersionService] Download starting. Auth token present: ${authToken != null && authToken.isNotEmpty}');
+      debugPrint(
+        '[VersionService] Download starting. Auth token present: ${authToken != null && authToken.isNotEmpty}',
+      );
       if (kDebugMode) {
         debugPrint(
           '[VersionService] Debug build detected. Installing a release APK over a debug app usually fails due to signing mismatch.',
@@ -730,11 +758,17 @@ class _UpdateDialogState extends State<UpdateDialog> {
               children: [
                 _VersionBadge(
                   label: 'Current',
-                  value: _formatVersionLabel(widget.currentVersion, widget.currentBuild),
+                  value: _formatVersionLabel(
+                    widget.currentVersion,
+                    widget.currentBuild,
+                  ),
                 ),
                 _VersionBadge(
                   label: 'Latest',
-                  value: _formatVersionLabel(widget.info.version, widget.info.buildNumber),
+                  value: _formatVersionLabel(
+                    widget.info.version,
+                    widget.info.buildNumber,
+                  ),
                 ),
               ],
             ),
@@ -768,7 +802,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: appSurface,
                   borderRadius: BorderRadius.circular(10),
@@ -805,13 +842,19 @@ class _UpdateDialogState extends State<UpdateDialog> {
                       if (!mounted) return;
                       Navigator.of(this.context).pop();
                     },
-                    child: const Text('Later', style: TextStyle(color: appMutedText)),
+                    child: const Text(
+                      'Later',
+                      style: TextStyle(color: appMutedText),
+                    ),
                   ),
                 FilledButton(
                   style: FilledButton.styleFrom(
                     backgroundColor: appPrimary,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 11,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
