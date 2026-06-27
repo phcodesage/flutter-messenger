@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -511,6 +512,92 @@ class StorageService {
     } catch (e) {
       debugPrint('Error getting pomodoro state: $e');
       return null;
+    }
+  }
+
+  /// Get starred user IDs for forwarding
+  static Future<Set<int>> getStarredUserIds(int currentUserId) async {
+    final key = 'fwd_star_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      final list = prefs.getStringList(key);
+      if (list == null) return {};
+      return list.map(int.parse).toSet();
+    } catch (e) {
+      debugPrint('Error getting starred user IDs: $e');
+      return {};
+    }
+  }
+
+  /// Toggle starred user ID for forwarding
+  static Future<bool> toggleStarredUserId(int currentUserId, int userId) async {
+    final key = 'fwd_star_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      final set = await getStarredUserIds(currentUserId);
+      final isStarred = set.contains(userId);
+      if (isStarred) {
+        set.remove(userId);
+      } else {
+        set.add(userId);
+      }
+      await prefs.setStringList(key, set.map((id) => id.toString()).toList());
+      return !isStarred;
+    } catch (e) {
+      debugPrint('Error toggling starred user ID: $e');
+      return false;
+    }
+  }
+
+  /// Get forward frequencies for a user
+  static Future<Map<int, int>> getForwardFrequencies(int currentUserId) async {
+    final key = 'fwd_freq_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      final rawJson = prefs.getString(key);
+      if (rawJson == null) return {};
+      final map = jsonDecode(rawJson) as Map<String, dynamic>;
+      return map.map((k, v) => MapEntry(int.parse(k), v as int));
+    } catch (e) {
+      debugPrint('Error getting forward frequencies: $e');
+      return {};
+    }
+  }
+
+  /// Increment forward frequency for a user
+  static Future<void> incrementForwardFrequency(int currentUserId, int userId) async {
+    final key = 'fwd_freq_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      final map = await getForwardFrequencies(currentUserId);
+      map[userId] = (map[userId] ?? 0) + 1;
+      final rawJson = jsonEncode(map.map((k, v) => MapEntry(k.toString(), v)));
+      await prefs.setString(key, rawJson);
+    } catch (e) {
+      debugPrint('Error incrementing forward frequency: $e');
+    }
+  }
+
+  /// Save starred user IDs directly (overwrite cache)
+  static Future<void> saveStarredUserIds(int currentUserId, Set<int> starredIds) async {
+    final key = 'fwd_star_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setStringList(key, starredIds.map((id) => id.toString()).toList());
+    } catch (e) {
+      debugPrint('Error saving starred user IDs: $e');
+    }
+  }
+
+  /// Save forward frequencies directly (overwrite cache)
+  static Future<void> saveForwardFrequencies(int currentUserId, Map<int, int> frequencies) async {
+    final key = 'fwd_freq_$currentUserId';
+    try {
+      final prefs = await _getPrefs();
+      final rawJson = jsonEncode(frequencies.map((k, v) => MapEntry(k.toString(), v)));
+      await prefs.setString(key, rawJson);
+    } catch (e) {
+      debugPrint('Error saving forward frequencies: $e');
     }
   }
 }

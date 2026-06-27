@@ -7,7 +7,7 @@ class ApiConfig {
   // The default keeps plain `flutter run` (without --dart-define-from-file) working.
   static const String baseUrl = String.fromEnvironment(
     'BASE_URL',
-    //defaultValue: 'https://check.flask-meet.site/',
+    //defaultValue: 'https://web.flask-call-app.site/',
     defaultValue: 'https://check.flask-meet.site/',
   );
 
@@ -36,6 +36,14 @@ class ApiConfig {
   static const String presenceStatusUrl =
       '$baseUrl$mobilePrefix/presence/status';
   static const String heartbeatUrl = '$baseUrl$mobilePrefix/presence/heartbeat';
+
+  // Forwarding preference endpoints
+  static const String forwardPreferencesUrl =
+      '$baseUrl$mobilePrefix/forward/preferences';
+  static const String forwardToggleStarUrl =
+      '$baseUrl$mobilePrefix/forward/toggle-star';
+  static const String forwardIncrementFrequencyUrl =
+      '$baseUrl$mobilePrefix/forward/increment-frequency';
 
   // Timeouts
   static const Duration connectionTimeout = Duration(seconds: 30);

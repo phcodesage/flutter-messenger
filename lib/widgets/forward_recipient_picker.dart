@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../models/lobby_user.dart';
 import '../services/lobby_service.dart';
+import '../services/forward_service.dart';
+import '../services/chat_cache_service.dart';
+import '../services/storage_service.dart';
 
 /// Bottom sheet picker for selecting DM contacts to forward a message to.
 class ForwardRecipientPicker extends StatefulWidget {
@@ -42,30 +45,147 @@ class _ForwardRecipientPickerState extends State<ForwardRecipientPicker> {
   bool _isLoading = true;
   String? _error;
 
+  Set<int> _starredUserIds = {};
+  Map<int, int> _forwardFrequencies = {};
+
   @override
   void initState() {
     super.initState();
-    _loadUsers();
+    _loadFromCacheInstantly();
+    _refreshFromNetworkInBackground();
   }
 
-  Future<void> _loadUsers() async {
+  /// Step 1: Render immediately from local disk cache + in-memory prefs cache.
+  /// No network call — this is synchronous-fast and shows the picker with no spinner.
+  Future<void> _loadFromCacheInstantly() async {
+    final cachedUsers =
+        await ChatCacheService.loadLobbyUsers(widget.currentUserId);
+    final cachedPrefs = ForwardService.cachedPreferences;
+
+    // Fall back to SharedPreferences if in-memory prefs not available yet
+    Set<int> starred;
+    Map<int, int> freq;
+    if (cachedPrefs != null) {
+      starred = cachedPrefs['starred'] as Set<int>? ?? <int>{};
+      freq = cachedPrefs['frequencies'] as Map<int, int>? ?? <int, int>{};
+    } else {
+      final userId = widget.currentUserId;
+      starred = await StorageService.getStarredUserIds(userId);
+      freq = await StorageService.getForwardFrequencies(userId);
+    }
+
+    if (!mounted) return;
+    if (cachedUsers.isNotEmpty) {
+      setState(() {
+        _starredUserIds = starred;
+        _forwardFrequencies = freq;
+        _users = cachedUsers
+            .where((u) => u.id != widget.currentUserId)
+            .toList();
+        _sortUsers();
+        _isLoading = false; // show instantly without spinner
+      });
+    }
+  }
+
+  /// Step 2: Fetch fresh data from the network silently and update state.
+  /// If the cache was empty, this also clears the loading spinner.
+  Future<void> _refreshFromNetworkInBackground() async {
     try {
-      final users = await LobbyService.getLobbyUsers();
+      final prefsData = await ForwardService.getForwardPreferences();
+      final starred = prefsData['starred'] as Set<int>? ?? <int>{};
+      final freq = prefsData['frequencies'] as Map<int, int>? ?? <int, int>{};
+
+      List<LobbyUser> users;
+      try {
+        users = await LobbyService.getLobbyUsers();
+        await ChatCacheService.saveLobbyUsers(widget.currentUserId, users);
+      } catch (e) {
+        debugPrint('[ForwardRecipientPicker] Network error, keeping cache: $e');
+        // Already rendered from cache — nothing more to do
+        if (_users != null && mounted) {
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
+
       if (mounted) {
         setState(() {
+          _starredUserIds = starred;
+          _forwardFrequencies = freq;
           _users = users
               .where((u) => u.id != widget.currentUserId)
               .toList();
+          _sortUsers();
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && _users == null) {
         setState(() {
           _error = 'Failed to load contacts';
           _isLoading = false;
         });
       }
+    }
+  }
+
+  DateTime _parseUtcTimestamp(String timestamp) {
+    final hasTimezone = RegExp(r'[zZ]|[+-]\d{2}:?\d{2}$').hasMatch(timestamp);
+    final parsed = DateTime.parse(hasTimezone ? timestamp : '${timestamp}Z');
+    return parsed.toLocal();
+  }
+
+  DateTime _parseMessageTime(String? timestamp) {
+    if (timestamp == null || timestamp.isEmpty) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    try {
+      return _parseUtcTimestamp(timestamp);
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
+  void _sortUsers() {
+    if (_users == null) return;
+    _users!.sort((a, b) {
+      final aStarred = _starredUserIds.contains(a.id);
+      final bStarred = _starredUserIds.contains(b.id);
+      if (aStarred != bStarred) {
+        return aStarred ? -1 : 1;
+      }
+
+      final aTime = _parseMessageTime(a.lastMessageTime);
+      final bTime = _parseMessageTime(b.lastMessageTime);
+      final timeCompare = bTime.compareTo(aTime);
+      if (timeCompare != 0) return timeCompare;
+
+      final aFreq = _forwardFrequencies[a.id] ?? 0;
+      final bFreq = _forwardFrequencies[b.id] ?? 0;
+      if (aFreq != bFreq) {
+        return bFreq.compareTo(aFreq);
+      }
+
+      if (a.isOnline != b.isOnline) {
+        return a.isOnline ? -1 : 1;
+      }
+
+      return a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
+    });
+  }
+
+  Future<void> _toggleStar(int userId) async {
+    final isStarredNow = await ForwardService.toggleStarredUserId(userId);
+    if (mounted) {
+      setState(() {
+        if (isStarredNow) {
+          _starredUserIds.add(userId);
+        } else {
+          _starredUserIds.remove(userId);
+        }
+        _sortUsers();
+      });
     }
   }
 
@@ -160,9 +280,9 @@ class _ForwardRecipientPickerState extends State<ForwardRecipientPicker> {
                   onPressed: _selectedIds.isEmpty
                       ? null
                       : () {
-                          Navigator.pop(context);
-                          widget.onConfirm(_selectedIds.toList());
-                        },
+                           Navigator.pop(context);
+                           widget.onConfirm(_selectedIds.toList());
+                         },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF7c3aed),
                     disabledBackgroundColor:
@@ -221,6 +341,18 @@ class _ForwardRecipientPickerState extends State<ForwardRecipientPicker> {
       itemBuilder: (context, index) {
         final user = users[index];
         final isSelected = _selectedIds.contains(user.id);
+        final isStarred = _starredUserIds.contains(user.id);
+        final freq = _forwardFrequencies[user.id] ?? 0;
+
+        String subtitleText = '@${user.username}';
+        Color subtitleColor = Colors.white54;
+        if (isStarred) {
+          subtitleText = 'Starred';
+          subtitleColor = const Color(0xFFfbbf24);
+        } else if (freq > 0) {
+          subtitleText = 'Forwarded $freq×';
+          subtitleColor = const Color(0xFFa78bfa);
+        }
 
         return ListTile(
           leading: CircleAvatar(
@@ -244,14 +376,26 @@ class _ForwardRecipientPickerState extends State<ForwardRecipientPicker> {
             style: const TextStyle(color: Colors.white, fontSize: 15),
           ),
           subtitle: Text(
-            '@${user.username}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+            subtitleText,
+            style: TextStyle(color: subtitleColor, fontSize: 12),
           ),
-          trailing: Checkbox(
-            value: isSelected,
-            onChanged: (_) => _toggleUser(user.id),
-            activeColor: const Color(0xFF7c3aed),
-            checkColor: Colors.white,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: Icon(
+                  isStarred ? Icons.star : Icons.star_border,
+                  color: isStarred ? const Color(0xFFfbbf24) : Colors.white38,
+                ),
+                onPressed: () => _toggleStar(user.id),
+              ),
+              Checkbox(
+                value: isSelected,
+                onChanged: (_) => _toggleUser(user.id),
+                activeColor: const Color(0xFF7c3aed),
+                checkColor: Colors.white,
+              ),
+            ],
           ),
           onTap: () => _toggleUser(user.id),
         );

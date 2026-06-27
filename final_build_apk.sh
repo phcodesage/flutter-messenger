@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESTINATION_DIR="/Users/macmini/Documents/code-proj/flask-proj/flask_web_backend/app/static/downloads/android"
 OUTPUT_BASE_NAME="flask_call_app"
 KEY_PROPERTIES_PATH="$SCRIPT_DIR/android/key.properties"
-#PRODUCTION_URL="https://web.flask-call-app.site/"
-PRODUCTION_URL="https://check.flask-meet.site/"
+PRODUCTION_URL="https://web.flask-call-app.site/"
+
 
 usage() {
   cat <<'EOF'

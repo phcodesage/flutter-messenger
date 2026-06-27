@@ -41,6 +41,7 @@ import 'share_target_screen.dart';
 import 'ai_chat_screen.dart';
 import 'pomodoro/pomodoro_view.dart';
 import '../services/pomodoro_service.dart';
+import '../services/forward_service.dart';
 
 /// Lobby/Chat list screen
 class LobbyScreen extends StatefulWidget {
@@ -65,6 +66,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   List<LobbyUser> _filteredUsers = [];
   List<Group> _groups = []; // Group chats
   List<Group> _filteredGroups = []; // Filtered group chats
+  Set<int> _starredUserIds = {}; // Starred/pinned users for forwarding preference
   bool _isLoading = false;
   bool _isCurrentUserAdmin = false;
   LobbyQuickFilter _activeFilter = LobbyQuickFilter.all;
@@ -1985,6 +1987,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final userId = await StorageService.getUserId();
     if (useCacheFirst && userId != null) {
       final cached = await ChatCacheService.loadLobbyUsers(userId);
+      final starred = await StorageService.getStarredUserIds(userId);
       if (cached.isNotEmpty && mounted) {
         final username = await StorageService.getUsername();
         final usersWithSelf = await _ensureSelfUserInLobby(
@@ -1996,17 +1999,32 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         setState(() {
           _lobbyUsers = sortedCachedUsers;
           _filteredUsers = List.from(sortedCachedUsers);
+          _starredUserIds = starred;
         });
         _filterUsers();
       }
     }
     try {
-      // Load both users and groups in parallel
+      // Load users, groups, and forwarding preferences in parallel.
+      // prewarm() populates ForwardService._cachedPreferences so the
+      // forward picker opens instantly without any network wait.
       final results = await Future.wait([
         LobbyService.getLobbyUsers(),
         GroupService.getGroups().catchError((e) {
           debugPrint('Groups not available yet: $e');
           return <Group>[];
+        }),
+        ForwardService.prewarm().then((_) {
+          return ForwardService.cachedPreferences ?? <String, dynamic>{
+            'starred': <int>{},
+            'frequencies': <int, int>{},
+          };
+        }).catchError((e) {
+          debugPrint('Error pre-fetching forward preferences: $e');
+          return <String, dynamic>{
+            'starred': <int>{},
+            'frequencies': <int, int>{},
+          };
         }),
       ]);
 
@@ -2019,11 +2037,15 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       );
       final users = _sortUsersByRecentActivity(usersWithSelf);
       final groups = _sortGroupsByRecentActivity(results[1] as List<Group>);
+      final starred = results.length > 2
+          ? (results[2] as Map<String, dynamic>)['starred'] as Set<int>? ?? <int>{}
+          : <int>{};
 
       if (mounted) {
         setState(() {
           _lobbyUsers = users;
           _groups = groups;
+          _starredUserIds = starred;
           _isLoading = false;
         });
         _filterUsers();
@@ -2049,7 +2071,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         });
         _openSharePickerIfNeeded();
       }
-      debugPrint('Error loading lobby: $e');
+      debugPrint('Error loading lobby ($friendly): $e');
     }
   }
 
@@ -2619,10 +2641,25 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _openNewChatPicker() {
-    final currentId = _socketService.currentUserId;
+  Future<void> _openNewChatPicker() async {
+    final currentId = _socketService.currentUserId ?? await _currentUserId;
     // Show all known contacts except current user (they can "message yourself" via the tile)
     final contacts = _lobbyUsers.where((u) => u.id != currentId).toList();
+
+    // Sort: starred contacts first, then online, then alphabetical
+    contacts.sort((a, b) {
+      final aStarred = _starredUserIds.contains(a.id);
+      final bStarred = _starredUserIds.contains(b.id);
+      if (aStarred != bStarred) {
+        return aStarred ? -1 : 1;
+      }
+      if (a.isOnline != b.isOnline) {
+        return a.isOnline ? -1 : 1;
+      }
+      return a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
+    });
+
+    if (!mounted) return;
 
     showModalBottomSheet<void>(
       context: context,
@@ -2689,6 +2726,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                               user.avatarColorIndex,
                             );
                             final s = _compactScale(context);
+                            final isStarred = _starredUserIds.contains(user.id);
                             return ListTile(
                               dense: true,
                               visualDensity: const VisualDensity(
@@ -2729,13 +2767,28 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                                         ),
                                       ),
                               ),
-                              title: Text(
-                                user.fullName,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14 * s,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      user.fullName,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14 * s,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (isStarred) ...[
+                                    const SizedBox(width: 4),
+                                    const Icon(
+                                      Icons.star_rounded,
+                                      color: Color(0xFFfbbf24),
+                                      size: 16,
+                                    ),
+                                  ],
+                                ],
                               ),
                               subtitle: Text(
                                 user.isOnline ? 'Online' : 'Offline',
@@ -2749,7 +2802,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                               trailing: user.isOnline
                                   ? Icon(
                                       Icons.circle,
-                                      color: Color(0xFF00E676),
+                                      color: const Color(0xFF00E676),
                                       size: _cs(context, 10),
                                     )
                                   : null,
@@ -4200,16 +4253,30 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Name
-                      Text(
-                        isSelfChatTile
-                            ? '${user.fullName} (You)'
-                            : user.fullName,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16 * s,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              isSelfChatTile
+                                  ? '${user.fullName} (You)'
+                                  : user.fullName,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16 * s,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_starredUserIds.contains(user.id) && !isSelfChatTile) ...[
+                            const SizedBox(width: 4),
+                            const Icon(
+                              Icons.star_rounded,
+                              color: Color(0xFFfbbf24),
+                              size: 16,
+                            ),
+                          ],
+                        ],
                       ),
                       // Email (admin-only view)
                       if (_isCurrentUserAdmin && user.email.isNotEmpty)
