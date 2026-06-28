@@ -559,7 +559,11 @@ class GroupMessage {
             : null,
         content: content,
         messageType: messageType,
-        timestamp: json['timestamp'] as String,
+        timestamp: json['timestamp'] as String? ??
+            DateTime.fromMillisecondsSinceEpoch(
+              json['timestamp_ms'] as int? ??
+                  DateTime.now().millisecondsSinceEpoch,
+            ).toUtc().toIso8601String(),
         timestampMs: json['timestamp_ms'] as int? ?? 0,
         isDeleted: json['is_deleted'] as bool? ?? false,
         fileUrl: fileUrl,

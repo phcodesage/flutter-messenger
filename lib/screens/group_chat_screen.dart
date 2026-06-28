@@ -43,6 +43,7 @@ import '../widgets/common_phrases_sheet.dart';
 import '../widgets/forward_recipient_picker.dart';
 import '../widgets/cached_image.dart';
 import '../widgets/file_type_icon.dart';
+import '../widgets/file_preview_modal_content.dart';
 import 'chat/chat_date_separator.dart';
 import 'chat/swipeable_message.dart';
 import 'chat/chat_header.dart';
@@ -125,6 +126,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void _notifyTaskModalChanged() {
     _taskModalVersion.value = _taskModalVersion.value + 1;
   }
+
+  // File upload state for preview modal
+  bool _isActivelyUploading = false;
+  final ValueNotifier<double> _activeUploadProgressNotifier = ValueNotifier<double>(0.0);
+  File? _pendingFile;
+  String? _pendingFileName;
+  String? _pendingFileMimeType;
+  bool _pendingFileIsFromCamera = false;
 
   // Color customization (for group chat theme)
   Color _headerColor = const Color(0xFF4C1D95); // Default purple color
@@ -761,9 +770,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
       if (mounted) {
         debugPrint(
-          '📨 [GROUP NEW MESSAGE] Widget is mounted, adding to messages list',
+          '📨 [GROUP NEW MESSAGE] Widget is mounted, updating messages list',
         );
         setState(() {
+          final existingIndex = _messages.indexWhere((m) => m.id == message.id);
+          if (existingIndex != -1) {
+            _messages[existingIndex] = message;
+            return;
+          }
+
+          if (message.senderId == _currentUserId) {
+            final optimisticIndex = _messages.indexWhere(
+              (m) =>
+                  m.id > 1000000000000 &&
+                  m.senderId == _currentUserId &&
+                  (m.content == message.content ||
+                      (message.messageType != 'text' &&
+                          m.messageType == message.messageType)),
+            );
+            if (optimisticIndex != -1) {
+              _messages[optimisticIndex] = message;
+              return;
+            }
+          }
+
           _messages.add(message);
           debugPrint(
             '📨 [GROUP NEW MESSAGE] Messages count: ${_messages.length}',
@@ -1484,7 +1514,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     if (image == null) return;
 
-    await _uploadFile(File(image.path));
+    await _showFilePreviewModal(File(image.path), image.name);
   }
 
   Future<void> _pickAndSendFile() async {
@@ -1493,7 +1523,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (result == null || result.files.isEmpty) return;
 
     final file = File(result.files.first.path!);
-    await _uploadFile(file);
+    await _showFilePreviewModal(file, result.files.first.name);
   }
 
   Future<void> _uploadFile(File file) async {
@@ -1571,6 +1601,243 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _messages.removeWhere((m) => m.id == tempId);
         });
         _showTopSnackBar(SnackBar(content: Text('Failed to upload file: $e')));
+      }
+    }
+  }
+
+  String _resolveOutgoingFileName({
+    required String originalName,
+    required String mimeType,
+    required bool isFromCamera,
+  }) {
+    final raw = originalName.split(RegExp(r'[\\/]')).last.trim();
+    final ext = _fileExtension(raw, mimeType);
+    final looksTemporary = RegExp(
+      r'^(scaled_)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',
+      caseSensitive: false,
+    ).hasMatch(raw);
+
+    if (isFromCamera || looksTemporary || raw.isEmpty) {
+      return 'Photo_${_fileTimestamp(DateTime.now())}.$ext';
+    }
+
+    return raw;
+  }
+
+  String _fileExtension(String fileName, String mimeType) {
+    final dot = fileName.lastIndexOf('.');
+    if (dot > -1 && dot < fileName.length - 1) {
+      return fileName.substring(dot + 1).toLowerCase();
+    }
+    return _extensionFromMime(mimeType);
+  }
+
+  String _extensionFromMime(String mimeType) {
+    if (mimeType.startsWith('image/')) return mimeType.split('/').last;
+    if (mimeType.startsWith('video/')) return mimeType.split('/').last;
+    if (mimeType == 'application/pdf') return 'pdf';
+    return 'bin';
+  }
+
+  String _fileTimestamp(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    final ss = dt.second.toString().padLeft(2, '0');
+    return '$y$m${d}_$hh$mm$ss';
+  }
+
+  String _truncateMiddle(String value, {int maxChars = 44}) {
+    if (value.length <= maxChars) return value;
+    final keep = (maxChars - 3) ~/ 2;
+    final start = value.substring(0, keep);
+    final end = value.substring(value.length - keep);
+    return '$start...$end';
+  }
+
+  IconData _getFileIcon(String mimeType) {
+    if (mimeType.startsWith('image/')) return Icons.image;
+    if (mimeType.startsWith('video/')) return Icons.videocam;
+    if (mimeType.startsWith('audio/')) return Icons.audiotrack;
+    if (mimeType.contains('pdf')) return Icons.picture_as_pdf;
+    if (mimeType.contains('word') || mimeType.contains('document')) {
+      return Icons.description;
+    }
+    if (mimeType.contains('excel') || mimeType.contains('spreadsheet')) {
+      return Icons.table_chart;
+    }
+    if (mimeType.contains('zip') || mimeType.contains('archive')) {
+      return Icons.folder_zip;
+    }
+    return Icons.insert_drive_file;
+  }
+
+  Future<void> _showFilePreviewModal(
+    File file,
+    String fileName, {
+    bool isFromCamera = false,
+  }) async {
+    try {
+      await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+    } catch (_) {}
+
+    final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
+    final isImage = mimeType.startsWith('image/');
+    final isVideo = mimeType.startsWith('video/');
+    final fileSize = file.lengthSync();
+    final uploadFileName = _resolveOutgoingFileName(
+      originalName: fileName,
+      mimeType: mimeType,
+      isFromCamera: isFromCamera,
+    );
+    final displayFileName = _truncateMiddle(uploadFileName, maxChars: 44);
+    if (!mounted) return;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      isDismissible: !_isActivelyUploading,
+      enableDrag: !_isActivelyUploading,
+      backgroundColor: Colors.transparent,
+      builder: (modalContext) {
+        return FilePreviewModalContent(
+          file: file,
+          fileName: uploadFileName,
+          displayFileName: displayFileName,
+          mimeType: mimeType,
+          isImage: isImage,
+          isVideo: isVideo,
+          fileSize: fileSize,
+          isFromCamera: isFromCamera,
+          isUploading: _isActivelyUploading,
+          uploadProgressNotifier: _activeUploadProgressNotifier,
+          onMinimize: () {
+            if (!_isActivelyUploading) {
+              setState(() {
+                _pendingFile = file;
+                _pendingFileName = uploadFileName;
+                _pendingFileMimeType = mimeType;
+                _pendingFileIsFromCamera = isFromCamera;
+              });
+            }
+            Navigator.pop(modalContext);
+          },
+          onClose: () {
+            if (!_isActivelyUploading) {
+              setState(() {
+                _pendingFile = null;
+                _pendingFileName = null;
+                _pendingFileMimeType = null;
+              });
+            }
+            Navigator.pop(modalContext);
+          },
+          onReplace: () {
+            setState(() {
+              _pendingFile = null;
+              _pendingFileName = null;
+              _pendingFileMimeType = null;
+            });
+            Navigator.pop(modalContext);
+            if (isFromCamera) {
+              _takePhoto();
+            } else {
+              _pickFile();
+            }
+          },
+          onSend: () {
+            Navigator.pop(modalContext);
+            _startFileUpload(file, uploadFileName, displayFileName, mimeType);
+          },
+          getFileIcon: _getFileIcon,
+        );
+      },
+    );
+  }
+
+  Future<void> _startFileUpload(
+    File file,
+    String uploadFileName,
+    String displayFileName,
+    String mimeType,
+  ) async {
+    setState(() {
+      _isActivelyUploading = true;
+      _activeUploadProgressNotifier.value = 0.05;
+    });
+
+    final tempId = DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now();
+    final fileSize = file.lengthSync();
+
+    String messageType = 'file';
+    String content = uploadFileName;
+    if (mimeType.startsWith('image/')) {
+      messageType = 'image';
+      content = 'Image: $uploadFileName';
+    } else if (mimeType.startsWith('video/')) {
+      messageType = 'video';
+      content = 'Video: $uploadFileName';
+    } else if (mimeType.startsWith('audio/')) {
+      messageType = 'audio';
+      content = 'Audio: $uploadFileName';
+    }
+
+    final optimisticMessage = GroupMessage(
+      id: tempId,
+      messageId: tempId,
+      groupId: widget.group.id,
+      senderId: _currentUserId!,
+      sender: null,
+      content: content,
+      messageType: messageType,
+      timestamp: now.toIso8601String(),
+      timestampMs: now.millisecondsSinceEpoch,
+      status: 'pending',
+      fileName: uploadFileName,
+      fileSize: fileSize,
+      fileType: mimeType,
+      localFilePath: file.path,
+    );
+
+    if (mounted) {
+      setState(() {
+        _messages.add(optimisticMessage);
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
+
+    try {
+      _activeUploadProgressNotifier.value = 0.3;
+      await GroupService.uploadFile(groupId: widget.group.id, file: file);
+      _activeUploadProgressNotifier.value = 1.0;
+    } catch (e) {
+      debugPrint('Error uploading file: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.id == tempId);
+        });
+        _showTopSnackBar(SnackBar(content: Text('Failed to upload file: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isActivelyUploading = false;
+          _pendingFile = null;
+          _pendingFileName = null;
+          _pendingFileMimeType = null;
+        });
       }
     }
   }
@@ -4405,7 +4672,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles();
       if (result != null && result.files.single.path != null) {
-        await _uploadFile(File(result.files.single.path!));
+        final file = File(result.files.single.path!);
+        await _showFilePreviewModal(file, result.files.single.name);
       }
     } catch (e) {
       debugPrint('Error picking file: $e');
@@ -4421,7 +4689,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       final picker = ImagePicker();
       final XFile? photo = await picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
-        await _uploadFile(File(photo.path));
+        final file = File(photo.path);
+        await _showFilePreviewModal(file, photo.name, isFromCamera: true);
       }
     } catch (e) {
       debugPrint('Error taking photo: $e');
