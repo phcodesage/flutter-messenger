@@ -24,6 +24,8 @@ import '../widgets/incoming_call_setup_modal.dart';
 import 'chat_screen.dart' show ChatScreen;
 import 'connected_call_screen.dart';
 import 'group_chat_screen.dart';
+import 'group_call_screen.dart';
+import '../widgets/group_call_invitation_modal.dart';
 import 'create_group_screen.dart';
 import 'sign_in_page.dart';
 import '../services/storage_service.dart';
@@ -52,7 +54,7 @@ class LobbyScreen extends StatefulWidget {
   State<LobbyScreen> createState() => _LobbyScreenState();
 }
 
-enum LobbyQuickFilter { all, online, groups, alarmX }
+enum LobbyQuickFilter { all, selfChat, groups, alarmX }
 
 /// Minimum window width at which the lobby switches to the desktop two-pane
 /// layout (conversation list on the left, open chat on the right).
@@ -103,6 +105,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   /// The conversation shown in the detail pane in two-pane mode (null = none).
   LobbyUser? _selectedChatUser;
   String? _activeIncomingCallRoomId;
+  String? _activeGroupCallRoomId;
   final Map<int, String> _crossDeviceActiveCallRoomByUserId = {};
 
   // Typing indicator: maps userId → auto-clear timer
@@ -602,6 +605,18 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       _dismissIncomingCallModalIfOpen();
       PresenceService().isHandlingIncomingCall = false;
       _clearIncomingCallNotificationsForEvent(data);
+    });
+
+    // Listen for group call invitations
+    _socketService.addListener('groupCallInvitation', key, (Map<String, dynamic> data) {
+      _handleGroupCallInvitation(data);
+    });
+    _socketService.addListener('groupCallCancelled', key, (Map<String, dynamic> data) {
+      final roomId = data['room_id'] as String?;
+      if (roomId == _activeGroupCallRoomId) {
+        Navigator.of(context).popUntil((r) => r.settings.name != 'group_call_invitation');
+        _activeGroupCallRoomId = null;
+      }
     });
 
     // Primary cross-device sync event for offer dismissal.
@@ -1538,6 +1553,49 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _handleGroupCallInvitation(Map<String, dynamic> data) async {
+    final roomId = data['room_id'] as String?;
+    final inviterId = data['inviter_id'] as int?;
+    final inviterName = data['inviter_name'] as String? ?? 'Someone';
+    if (roomId == null || inviterId == null || !mounted) return;
+    if (_activeGroupCallRoomId != null) return; // Already handling one
+
+    _activeGroupCallRoomId = roomId;
+
+    final myUserId = await StorageService.getUserId();
+    final myPeerId = myUserId?.toString() ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      routeSettings: const RouteSettings(name: 'group_call_invitation'),
+      builder: (_) => GroupCallInvitationModal(
+        roomId: roomId,
+        inviterId: inviterId,
+        inviterName: inviterName,
+        groupName: 'Group Call',
+        onDecline: () {
+          _socketService.respondToGroupCallInvitation(roomId, inviterId, 'declined');
+          _activeGroupCallRoomId = null;
+          Navigator.pop(context);
+        },
+        onAccept: () {
+          _socketService.respondToGroupCallInvitation(roomId, inviterId, 'accepted');
+          _activeGroupCallRoomId = null;
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (_) => GroupCallScreen(
+            roomId: roomId,
+            myPeerId: myPeerId,
+            callType: 'video',
+            groupName: 'Group Call',
+          )));
+        },
+      ),
+    ).whenComplete(() => _activeGroupCallRoomId = null);
+  }
+
   void _dismissIncomingCallModalIfOpen() {
     final route = _activeIncomingCallRoute;
     if (route == null || !mounted) return;
@@ -2399,7 +2457,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         _buildSortedUserAndAiTileBuilders(
           selectedUsers,
           includeAi: showAiChatTile,
-          isOnlineSection: _activeFilter == LobbyQuickFilter.online,
+          isOnlineSection: false,
         ),
       );
     }
@@ -2570,7 +2628,12 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     _openChat(
       target,
       callInProgress: false,
-      onReturn: () async => _loadLobby(useCacheFirst: false),
+      onReturn: () async {
+        if (mounted) {
+          setState(() => _activeFilter = LobbyQuickFilter.all);
+        }
+        await _loadLobby(useCacheFirst: false);
+      },
     );
   }
 
@@ -2767,28 +2830,14 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                                         ),
                                       ),
                               ),
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      user.fullName,
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 14 * s,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  if (isStarred) ...[
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.star_rounded,
-                                      color: Color(0xFFfbbf24),
-                                      size: 16,
-                                    ),
-                                  ],
-                                ],
+                              title: Text(
+                                user.fullName,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14 * s,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                               subtitle: Text(
                                 user.isOnline ? 'Online' : 'Offline',
@@ -2863,7 +2912,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     switch (_activeFilter) {
       case LobbyQuickFilter.all:
         return 0;
-      case LobbyQuickFilter.online:
+      case LobbyQuickFilter.selfChat:
         return 1;
       case LobbyQuickFilter.groups:
         return 2;
@@ -2908,7 +2957,8 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
           _activeFilter = LobbyQuickFilter.all;
           break;
         case 1:
-          _activeFilter = LobbyQuickFilter.online;
+          _activeFilter = LobbyQuickFilter.all;
+          _openSelfChat();
           break;
         case 2:
           _activeFilter = LobbyQuickFilter.groups;
@@ -3404,7 +3454,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         children: [
           chip('Chats', LobbyQuickFilter.all, const Color(0xFF00D9FF), 0),
           const SizedBox(width: 8),
-          chip('Online', LobbyQuickFilter.online, const Color(0xFF00E676), 1),
+          chip('Self Chat', LobbyQuickFilter.selfChat, const Color(0xFF00D9FF), 1),
           const SizedBox(width: 8),
           chip('Groups', LobbyQuickFilter.groups, const Color(0xFF00D9FF), 2),
         ],
@@ -3414,31 +3464,27 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Split users into status tiers for quick filter tabs.
-    final onlineUsers = _filteredUsers
-        .where((u) => _getStatusTier(u) == 0)
-        .toList();
-    final offlineUsers = _filteredUsers
-        .where((u) => _getStatusTier(u) != 0)
+    final selfUsers = _filteredUsers
+        .where((u) => u.id == _socketService.currentUserId)
         .toList();
 
     final selectedUsers = switch (_activeFilter) {
       LobbyQuickFilter.all => _filteredUsers,
-      LobbyQuickFilter.online => onlineUsers,
+      LobbyQuickFilter.selfChat => selfUsers,
       LobbyQuickFilter.groups => const <LobbyUser>[],
       LobbyQuickFilter.alarmX => const <LobbyUser>[],
     };
 
     final selectedSectionTitle = switch (_activeFilter) {
       LobbyQuickFilter.all => 'CHATS',
-      LobbyQuickFilter.online => 'ONLINE',
+      LobbyQuickFilter.selfChat => 'SELF CHAT',
       LobbyQuickFilter.groups => 'GROUPS',
       LobbyQuickFilter.alarmX => 'ALARM X',
     };
 
     final selectedSectionColor = switch (_activeFilter) {
       LobbyQuickFilter.all => const Color(0xFF00D9FF),
-      LobbyQuickFilter.online => const Color(0xFF00E676),
+      LobbyQuickFilter.selfChat => const Color(0xFF00D9FF),
       LobbyQuickFilter.groups => const Color(0xFF00D9FF),
       LobbyQuickFilter.alarmX => Colors.orange,
     };
@@ -3454,8 +3500,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final aiMatchesQuery =
         query.isEmpty || aiKeywords.any((keyword) => keyword.contains(query));
     final showAiChatTile =
-        (_activeFilter == LobbyQuickFilter.all ||
-            _activeFilter == LobbyQuickFilter.online) &&
+        (_activeFilter == LobbyQuickFilter.all) &&
         aiMatchesQuery;
     final hasVisibleResults = !isFilterEmpty || showAiChatTile;
     final lobbyItemBuilders = _buildLobbyListItemBuilders(
@@ -3644,9 +3689,6 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
           ? Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Self (message yourself) mini FAB
-                _buildSelfFab(),
-                const SizedBox(height: 12),
                 // AI Chat mini FAB (matches the lobby list's gradient bot avatar)
                 _buildAiFab(),
                 const SizedBox(height: 12),
@@ -3699,9 +3741,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                   label: 'Chats',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.circle_outlined),
-                  selectedIcon: Icon(Icons.circle, color: Color(0xFF00E676)),
-                  label: 'Online',
+                  icon: Icon(Icons.person_outlined),
+                  selectedIcon: Icon(Icons.person, color: Color(0xFF00D9FF)),
+                  label: 'Self Chat',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.groups_outlined),
@@ -4253,30 +4295,16 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Name
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              isSelfChatTile
-                                  ? '${user.fullName} (You)'
-                                  : user.fullName,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16 * s,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (_starredUserIds.contains(user.id) && !isSelfChatTile) ...[
-                            const SizedBox(width: 4),
-                            const Icon(
-                              Icons.star_rounded,
-                              color: Color(0xFFfbbf24),
-                              size: 16,
-                            ),
-                          ],
-                        ],
+                      Text(
+                        isSelfChatTile
+                            ? '${user.fullName} (You)'
+                            : user.fullName,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16 * s,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                       // Email (admin-only view)
                       if (_isCurrentUserAdmin && user.email.isNotEmpty)

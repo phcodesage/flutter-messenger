@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
@@ -17,9 +18,17 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/group.dart';
+import '../models/common_phrase.dart';
+import '../models/message.dart';
+import '../models/lobby_user.dart';
+import '../config/api_config.dart';
 import '../services/group_service.dart';
+import '../services/common_phrases_api.dart';
+import '../services/forward_service.dart';
+import '../services/lobby_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
+import 'group_call_screen.dart';
 import '../services/chat_cache_service.dart';
 import '../services/media_preload_service.dart';
 import '../services/translation_service.dart';
@@ -27,8 +36,17 @@ import '../services/active_chat_service.dart';
 import '../services/firebase_messaging_service.dart';
 import '../widgets/reaction_picker.dart';
 import '../widgets/color_picker_modal.dart';
+import '../widgets/voice_recording_modal.dart';
+import '../widgets/common_phrase_bar.dart';
+import '../widgets/common_phrases_sheet.dart';
+import '../widgets/forward_recipient_picker.dart';
 import '../widgets/cached_image.dart';
 import '../widgets/file_type_icon.dart';
+import 'chat/chat_date_separator.dart';
+import 'chat/swipeable_message.dart';
+import 'chat/chat_header.dart';
+import 'chat/chat_message_bubble.dart';
+import 'media_gallery_viewer.dart';
 
 /// Group chat screen for messaging in a group
 class GroupChatScreen extends StatefulWidget {
@@ -82,6 +100,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   // Auto-translate toggle
   bool _autoTranslate = false;
 
+  // Common phrases quick-bar (mobile-pinned phrases) state
+  late final CommonPhrasesApi _commonPhrasesApi = CommonPhrasesApi(
+    baseUrl: ApiConfig.baseUrl,
+  );
+  List<CommonPhrase> _commonPhrases = const [];
+  bool _hideCommonPhrases = false;
+
   // Translation state: { messageId: translatedText }
   final Map<int, String> _messageTranslations = {};
 
@@ -91,6 +116,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // Admin status
   bool _currentUserIsAdmin = false;
+
+  // Mutable group header info (kept in sync when edited/members change)
+  late String _groupName = widget.group.name;
+  late String _groupDescription = widget.group.description ?? '';
+  late int _memberCount = widget.group.memberCount;
 
   // Typing indicator state
   String _typingUserName = '';
@@ -103,6 +133,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     super.initState();
     _inputFocusNode.addListener(_onFocusChange);
     _scrollController.addListener(_onScroll);
+    _messageController.addListener(_syncCommonPhrasesVisibility);
 
     _initialize();
 
@@ -150,6 +181,53 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _setupRealtimeListeners();
     debugPrint('🎨 [INIT] Joining group chat...');
     _socketService.joinGroupChat(widget.group.id);
+
+    unawaited(_loadCommonPhrases());
+  }
+
+  /// Load mobile-pinned common phrases for the quick bar above the composer.
+  Future<void> _loadCommonPhrases() async {
+    try {
+      final phrases = await _commonPhrasesApi.fetch(limit: 8);
+      final pinnedOnly = phrases.where((p) => p.isPinnedMobile).toList()
+        ..sort(
+          (a, b) =>
+              (a.pinOrderMobile ?? 99).compareTo(b.pinOrderMobile ?? 99),
+        );
+      if (mounted) {
+        setState(() {
+          _commonPhrases = pinnedOnly.take(kMobileMaxPins).toList();
+        });
+      }
+    } catch (e) {
+      // Non-critical feature — fail silently.
+      debugPrint('Error loading group common phrases: $e');
+    }
+  }
+
+  /// Hide the phrase bar while the user is composing text.
+  void _syncCommonPhrasesVisibility() {
+    final shouldHide = _messageController.text.trim().isNotEmpty;
+    if (_hideCommonPhrases != shouldHide && mounted) {
+      setState(() => _hideCommonPhrases = shouldHide);
+    }
+  }
+
+  /// Tapping a phrase chip sends it immediately.
+  Future<void> _onCommonPhraseChipTap(CommonPhrase phrase) async {
+    final phraseText = phrase.phrase.trim();
+    if (phraseText.isEmpty) return;
+    _messageController.text = phraseText;
+    await _sendMessage();
+    unawaited(_commonPhrasesApi.trackUse(phraseText));
+  }
+
+  void _showCommonPhrasesModal() {
+    showCommonPhrasesSheet(
+      context,
+      api: _commonPhrasesApi,
+      onChanged: _loadCommonPhrases,
+    );
   }
 
   /// Load locally cached messages for this group and paint them immediately.
@@ -1396,6 +1474,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     _socketService.removeListenersForKey('group_chat_${widget.group.id}');
     _socketService.leaveGroupChat(widget.group.id);
+    _messageController.removeListener(_syncCommonPhrasesVisibility);
     _messageController.dispose();
     _scrollController.dispose();
     _audioPlayer.dispose();
@@ -1410,8 +1489,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: const Color(0xFF1A1A2E),
-      appBar: _buildAppBar(),
+      backgroundColor: const Color(0xFF2C2C2C),
+      appBar: ChatHeader(
+        scale: 1.0,
+        headerColor: _headerColor,
+        onBack: () => Navigator.pop(context),
+        groupName: _groupName,
+        groupAvatarUrl: widget.group.avatarUrl,
+        memberCount: _memberCount,
+        onCallVideo: () => _startGroupCall('video'),
+        onCallAudio: () => _startGroupCall('audio'),
+        onRingDoorbell: _ringDoorbell,
+        onShowMembers: _showGroupMembersSheet,
+        onShowSettings: _showGroupSettingsSheet,
+      ),
       body: GestureDetector(
         onTap: () => FocusScope.of(context).unfocus(),
         behavior: HitTestBehavior.translucent,
@@ -1439,7 +1530,43 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           addRepaintBoundaries: true,
                           itemCount: _messages.length,
                           itemBuilder: (context, index) {
-                            return _buildMessageBubble(_messages[index]);
+                            final message = _messages[index];
+                            final isSentByMe = message.senderId == _currentUserId;
+
+                            // Date separator between days
+                            Widget? dateSeparator;
+                            if (index < _messages.length - 1) {
+                              final next = _messages[index + 1];
+                              if (!_isSameDay(message.timestamp, next.timestamp)) {
+                                dateSeparator = ChatDateSeparator(
+                                  timestamp: message.timestamp,
+                                  scale: 1.0,
+                                );
+                              }
+                            } else {
+                              dateSeparator = ChatDateSeparator(
+                                timestamp: message.timestamp,
+                                scale: 1.0,
+                              );
+                            }
+
+                            final bubble = message.isDeleted || message.messageType == 'system'
+                                ? _buildMessageBubble(message)
+                                : SwipeableMessage(
+                                    isSentByMe: isSentByMe,
+                                    onReply: () {
+                                      setState(() => _replyingToMessage = message);
+                                      _inputFocusNode.requestFocus();
+                                    },
+                                    child: _buildMessageBubble(message),
+                                  );
+
+                            return Column(
+                              children: [
+                                bubble,
+                                if (dateSeparator != null) dateSeparator,
+                              ],
+                            );
                           },
                         ),
                         // Scroll to bottom button - positioned inside messages area
@@ -1521,6 +1648,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             // Reply preview
             if (_replyingToMessage != null) _buildReplyPreview(),
 
+            // Common phrases quick bar (mobile-pinned phrases)
+            CommonPhraseBar(
+              phrases: _commonPhrases,
+              hidden: _hideCommonPhrases || _showEmojiPicker,
+              onChipTap: _onCommonPhraseChipTap,
+            ),
+
             // Input area — only this section moves with the keyboard.
             // The rest of the screen stays stable (no full relayout).
             AnimatedPadding(
@@ -1571,7 +1705,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.group.name,
+                  _groupName,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -1581,7 +1715,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  '${widget.group.memberCount} members',
+                  '$_memberCount members',
                   style: TextStyle(color: Colors.grey[300], fontSize: 12),
                 ),
               ],
@@ -1590,6 +1724,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ],
       ),
       actions: [
+        // Video call button
+        IconButton(
+          icon: const Icon(Icons.videocam, color: Colors.white),
+          onPressed: () => _startGroupCall('video'),
+          tooltip: 'Video Call',
+        ),
+        // Audio call button
+        IconButton(
+          icon: const Icon(Icons.call, color: Colors.white),
+          onPressed: () => _startGroupCall('audio'),
+          tooltip: 'Audio Call',
+        ),
         // Doorbell button
         IconButton(
           icon: const Icon(Icons.notifications, color: Colors.white),
@@ -1604,9 +1750,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           color: const Color(0xFF1E1E2E),
           onSelected: (value) {
             if (value == 'members') {
-              // TODO: Show members list
+              _showGroupMembersSheet();
             } else if (value == 'settings') {
-              // TODO: Show group settings
+              _showGroupSettingsSheet();
             }
           },
           itemBuilder: (context) => [
@@ -2561,7 +2707,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B), // Match group chat header color
+        color: _headerColor,
         border: const Border(
           top: BorderSide(color: Color(0xFF3D3D3D), width: 1),
         ),
@@ -3580,6 +3726,83 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
+  /// Paste from clipboard: a copied media file or screenshot is uploaded
+  /// directly to the group; otherwise plain text is inserted into the composer.
+  Future<void> _pasteFromClipboard() async {
+    if (await _tryPasteClipboardMedia()) return;
+
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text != null && text.isNotEmpty) {
+      final current = _messageController.text;
+      _replaceInputTextWithSanitized(current.isEmpty ? text : '$current$text');
+      _inputFocusNode.requestFocus();
+    } else if (mounted) {
+      _showTopSnackBar(
+        const SnackBar(
+          content: Text('Clipboard is empty'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Tries to upload an image/video from the clipboard. Returns true when
+  /// clipboard media was handled, false when there is nothing to paste.
+  Future<bool> _tryPasteClipboardMedia() async {
+    if (!(Platform.isMacOS ||
+        Platform.isWindows ||
+        Platform.isLinux ||
+        Platform.isAndroid)) {
+      return false;
+    }
+
+    // 1) A real media file on the clipboard (copied from a gallery/file manager).
+    try {
+      final media = await _fileOpsChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getClipboardMediaFile',
+      );
+      final path = media?['path'] as String?;
+      if (path != null && path.isNotEmpty) {
+        final file = File(path);
+        if (await file.exists() && await file.length() > 0) {
+          await _uploadFile(file);
+          return true;
+        }
+      }
+    } on MissingPluginException {
+      // Older native build — fall back to raw bytes / text.
+    } on PlatformException catch (e) {
+      if (e.code != 'NO_IMAGE' && e.code != 'UNAVAILABLE') {
+        debugPrint('[GroupPaste] getClipboardMediaFile failed: ${e.code}');
+      }
+    } catch (e) {
+      debugPrint('[GroupPaste] getClipboardMediaFile error: $e');
+    }
+
+    // 2) Raw image data (e.g. screenshots copied as a bitmap).
+    try {
+      final bytes = await _fileOpsChannel.invokeMethod<Uint8List>(
+        'getClipboardImagePngBytes',
+      );
+      if (bytes == null || bytes.isEmpty) return false;
+
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'pasted_image_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsBytes(bytes, flush: true);
+      await _uploadFile(file);
+      return true;
+    } on PlatformException catch (e) {
+      if (e.code == 'NO_IMAGE' || e.code == 'UNAVAILABLE') return false;
+      debugPrint('[GroupPaste] clipboard image paste failed: ${e.code}');
+    } catch (e) {
+      debugPrint('[GroupPaste] clipboard image paste error: $e');
+    }
+    return false;
+  }
+
   /// Toggle emoji picker visibility (inline below input)
   void _showEmojiPickerModal(BuildContext context) {
     if (_showEmojiPicker) {
@@ -3914,13 +4137,90 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+  /// Start a group video or audio call.
+  Future<void> _startGroupCall(String callType) async {
+    final myUserId = await StorageService.getUserId();
+    if (myUserId == null || !mounted) return;
+    final myPeerId = myUserId.toString();
+
+    // Generate a unique room ID for this group call
+    final roomId = 'group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}';
+
+    // Fetch member list for invitations
+    List<int> memberIds = [];
+    List<String> memberUsernames = [];
+    try {
+      final details = await GroupService.getGroupDetails(widget.group.id);
+      final members = details['members'] as List? ?? [];
+      for (final m in members) {
+        if (m is GroupMember) {
+          if (m.userId != myUserId) {
+            memberIds.add(m.userId);
+            memberUsernames.add(m.user.username);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[GroupChat] Failed to fetch members for call: $e');
+    }
+
+    // Join call room and invite all members
+    _socketService.joinGroupCall(roomId, myPeerId);
+    if (memberIds.isNotEmpty) {
+      _socketService.inviteToGroupCall(roomId, memberIds, memberUsernames);
+    }
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupCallScreen(
+          roomId: roomId,
+          myPeerId: myPeerId,
+          callType: callType,
+          groupName: _groupName,
+        ),
+      ),
+    );
+  }
+
   /// Show voice recording modal (placeholder - to be implemented)
   Future<void> _showVoiceRecordingModal() async {
-    // TODO: Implement voice recording for group chat
-    _showTopSnackBar(
-      const SnackBar(
-        content: Text('Voice recording coming soon for group chats'),
-        duration: Duration(seconds: 2),
+    // Request microphone permission
+    final status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
+      if (mounted) {
+        _showTopSnackBar(
+          SnackBar(
+            content: const Text(
+              'Microphone permission is required to record voice messages',
+            ),
+            action: SnackBarAction(
+              label: 'Settings',
+              onPressed: () => openAppSettings(),
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (sheetContext) => VoiceRecordingModal(
+        onSend: (path, duration) async {
+          Navigator.pop(sheetContext);
+          // Reuse the standard file-upload path; the backend classifies an
+          // audio/* upload as a 'voice' message.
+          await _uploadFile(File(path));
+        },
+        onCancel: () => Navigator.pop(sheetContext),
       ),
     );
   }
@@ -4044,6 +4344,19 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     _copyGroupMessageToClipboard(message);
                   },
                 ),
+              // Forward option (any non-deleted message)
+              if (!message.isDeleted)
+                ListTile(
+                  leading: const Icon(Icons.forward, color: Colors.white),
+                  title: const Text(
+                    'Forward',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openForwardPicker(message);
+                  },
+                ),
               // Translate option (for incoming text messages)
               if (!isSentByMe &&
                   message.messageType == 'text' &&
@@ -4085,6 +4398,714 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ),
       ),
     );
+  }
+
+  /// Forward a group message to one or more 1-on-1 recipients.
+  void _openForwardPicker(GroupMessage message) {
+    // Adapt the GroupMessage to the 1-on-1 Message model that ForwardService
+    // consumes. Only content/type/file fields are read when building the
+    // forward payload; the rest are placeholders.
+    final adapted = Message(
+      id: message.id,
+      senderId: message.senderId,
+      recipientId: 0,
+      content: message.content,
+      messageType: message.messageType,
+      timestamp: message.timestamp,
+      timestampMs: message.timestampMs,
+      isRead: true,
+      status: 'sent',
+      threadId: '',
+      reactions: const {},
+      isDeleted: message.isDeleted,
+      fileUrl: message.fileUrl,
+      fileName: message.fileName,
+      fileSize: message.fileSize,
+      fileType: message.fileType,
+      caption: message.caption,
+    );
+
+    ForwardRecipientPicker.show(
+      context,
+      currentUserId: _currentUserId ?? 0,
+      onConfirm: (selectedUserIds) async {
+        if (selectedUserIds.isEmpty) return;
+
+        final result = await ForwardService.forwardToUsers(
+          message: adapted,
+          recipientIds: selectedUserIds,
+        );
+
+        if (!mounted) return;
+
+        if (result.allSucceeded) {
+          _showTopSnackBar(
+            SnackBar(
+              content: Text(
+                'Forwarded to ${result.successCount} recipient${result.successCount > 1 ? "s" : ""}',
+              ),
+              backgroundColor: const Color(0xFF059669),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        } else if (result.allFailed) {
+          _showTopSnackBar(
+            const SnackBar(
+              content: Text('Failed to forward message'),
+              backgroundColor: Color(0xFFB91C1C),
+            ),
+          );
+        } else {
+          _showTopSnackBar(
+            SnackBar(
+              content: Text(
+                'Forwarded to ${result.successCount}, failed for ${result.failureCount}',
+              ),
+              backgroundColor: const Color(0xFFD97706),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  // ============================================================
+  // GROUP MEMBERS / SETTINGS
+  // ============================================================
+
+  Color _accent() => const Color(0xFF8B5CF6);
+
+  /// Members list sheet. Admins can remove members or add new ones.
+  void _showGroupMembersSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        List<GroupMember> members = [];
+        bool loading = true;
+        String? error;
+
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            Future<void> load() async {
+              try {
+                final details = await GroupService.getGroupDetails(
+                  widget.group.id,
+                );
+                if (!ctx.mounted) return;
+                setSheetState(() {
+                  members = (details['members'] as List).cast<GroupMember>();
+                  loading = false;
+                  error = null;
+                });
+                if (mounted) setState(() => _memberCount = members.length);
+              } catch (e) {
+                if (!ctx.mounted) return;
+                setSheetState(() {
+                  loading = false;
+                  error = 'Failed to load members';
+                });
+              }
+            }
+
+            if (loading && members.isEmpty && error == null) load();
+
+            Future<void> removeMember(GroupMember m) async {
+              final confirmed = await showDialog<bool>(
+                context: ctx,
+                builder: (dctx) => AlertDialog(
+                  backgroundColor: const Color(0xFF1E1E2E),
+                  title: const Text(
+                    'Remove member',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  content: Text(
+                    'Remove ${m.user.fullName} from the group?',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dctx, true),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.red,
+                      ),
+                      child: const Text('Remove'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed != true) return;
+              try {
+                await GroupService.removeMember(
+                  groupId: widget.group.id,
+                  userId: m.userId,
+                );
+                await load();
+              } catch (e) {
+                if (mounted) {
+                  _showTopSnackBar(
+                    SnackBar(content: Text('Failed to remove member: $e')),
+                  );
+                }
+              }
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(
+                  height: MediaQuery.of(ctx).size.height * 0.7,
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[600],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.people, color: Colors.white),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Members (${members.length})',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (_currentUserIsAdmin)
+                              TextButton.icon(
+                                onPressed: () async {
+                                  await _showAddMembersSheet(
+                                    members.map((m) => m.userId).toSet(),
+                                  );
+                                  await load();
+                                },
+                                icon: Icon(
+                                  Icons.person_add,
+                                  size: 18,
+                                  color: _accent(),
+                                ),
+                                label: Text(
+                                  'Add',
+                                  style: TextStyle(color: _accent()),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: loading
+                            ? Center(
+                                child: CircularProgressIndicator(
+                                  color: _accent(),
+                                ),
+                              )
+                            : error != null
+                            ? Center(
+                                child: Text(
+                                  error!,
+                                  style: const TextStyle(color: Colors.white54),
+                                ),
+                              )
+                            : ListView.builder(
+                                itemCount: members.length,
+                                itemBuilder: (_, i) {
+                                  final m = members[i];
+                                  final isSelf = m.userId == _currentUserId;
+                                  final isAdmin = m.role == 'admin';
+                                  final name = m.user.fullName.isNotEmpty
+                                      ? m.user.fullName
+                                      : m.user.username;
+                                  return ListTile(
+                                    leading: CircleAvatar(
+                                      backgroundColor: _accent(),
+                                      child: Text(
+                                        name.isNotEmpty
+                                            ? name[0].toUpperCase()
+                                            : '?',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      isSelf ? '$name (You)' : name,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      isAdmin ? 'Admin' : 'Member',
+                                      style: TextStyle(
+                                        color: isAdmin
+                                            ? _accent()
+                                            : Colors.grey[400],
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    trailing:
+                                        (_currentUserIsAdmin && !isSelf)
+                                        ? IconButton(
+                                            icon: const Icon(
+                                              Icons.remove_circle_outline,
+                                              color: Colors.red,
+                                            ),
+                                            onPressed: () => removeMember(m),
+                                          )
+                                        : null,
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Add-members picker (admin). Lists users not already in the group.
+  Future<void> _showAddMembersSheet(Set<int> existingMemberIds) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        List<LobbyUser> users = [];
+        final Set<int> selected = {};
+        bool loading = true;
+        bool saving = false;
+        String? error;
+
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            Future<void> load() async {
+              try {
+                final all = await LobbyService.getLobbyUsers();
+                if (!ctx.mounted) return;
+                setSheetState(() {
+                  users = all
+                      .where((u) => !existingMemberIds.contains(u.id))
+                      .toList();
+                  loading = false;
+                });
+              } catch (e) {
+                if (!ctx.mounted) return;
+                setSheetState(() {
+                  loading = false;
+                  error = 'Failed to load users';
+                });
+              }
+            }
+
+            if (loading && users.isEmpty && error == null) load();
+
+            Future<void> confirmAdd() async {
+              if (selected.isEmpty) return;
+              setSheetState(() => saving = true);
+              try {
+                await GroupService.addMembers(
+                  groupId: widget.group.id,
+                  userIds: selected.toList(),
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (mounted) {
+                  _showTopSnackBar(
+                    SnackBar(
+                      content: Text('Added ${selected.length} member(s)'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (ctx.mounted) {
+                  setSheetState(() {
+                    saving = false;
+                    error = 'Failed to add members: $e';
+                  });
+                }
+              }
+            }
+
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(ctx).size.height * 0.7,
+                child: Column(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[600],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Add Members',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          ElevatedButton(
+                            onPressed: (selected.isEmpty || saving)
+                                ? null
+                                : confirmAdd,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _accent(),
+                              foregroundColor: Colors.white,
+                            ),
+                            child: saving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text('Add (${selected.length})'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          error!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    Expanded(
+                      child: loading
+                          ? Center(
+                              child: CircularProgressIndicator(
+                                color: _accent(),
+                              ),
+                            )
+                          : users.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No users to add',
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: users.length,
+                              itemBuilder: (_, i) {
+                                final u = users[i];
+                                final name = u.fullName.isNotEmpty
+                                    ? u.fullName
+                                    : u.username;
+                                final isSelected = selected.contains(u.id);
+                                return CheckboxListTile(
+                                  value: isSelected,
+                                  activeColor: _accent(),
+                                  checkColor: Colors.white,
+                                  onChanged: (v) => setSheetState(() {
+                                    if (v == true) {
+                                      selected.add(u.id);
+                                    } else {
+                                      selected.remove(u.id);
+                                    }
+                                  }),
+                                  title: Text(
+                                    name,
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  subtitle: Text(
+                                    '@${u.username}',
+                                    style: TextStyle(
+                                      color: Colors.grey[400],
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Group settings sheet: edit info (admin), add members (admin), leave group.
+  void _showGroupSettingsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[600],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: Icon(Icons.group, color: _accent()),
+                title: Text(
+                  _groupName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: Text(
+                  _groupDescription.isEmpty
+                      ? 'No description'
+                      : _groupDescription,
+                  style: TextStyle(color: Colors.grey[400]),
+                ),
+              ),
+              const Divider(color: Colors.white12),
+              if (_currentUserIsAdmin)
+                ListTile(
+                  leading: const Icon(Icons.edit, color: Colors.white),
+                  title: const Text(
+                    'Edit Group Info',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _editGroupInfoDialog();
+                  },
+                ),
+              if (_currentUserIsAdmin)
+                ListTile(
+                  leading: const Icon(Icons.person_add, color: Colors.white),
+                  title: const Text(
+                    'Add Members',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    try {
+                      final details = await GroupService.getGroupDetails(
+                        widget.group.id,
+                      );
+                      final existing =
+                          (details['members'] as List).cast<GroupMember>();
+                      await _showAddMembersSheet(
+                        existing.map((m) => m.userId).toSet(),
+                      );
+                    } catch (e) {
+                      if (mounted) {
+                        _showTopSnackBar(
+                          SnackBar(content: Text('Failed to load members: $e')),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.people, color: Colors.white),
+                title: const Text(
+                  'View Members',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showGroupMembersSheet();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                title: const Text(
+                  'Leave Group',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _confirmLeaveGroup();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Dialog to edit the group name + description (admin only).
+  Future<void> _editGroupInfoDialog() async {
+    final nameController = TextEditingController(text: _groupName);
+    final descController = TextEditingController(text: _groupDescription);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        title: const Text(
+          'Edit Group Info',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Group name',
+                labelStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: descController,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Description',
+                labelStyle: TextStyle(color: Colors.white54),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+    final newName = nameController.text.trim();
+    if (newName.isEmpty) {
+      if (mounted) {
+        _showTopSnackBar(
+          const SnackBar(content: Text('Group name cannot be empty')),
+        );
+      }
+      return;
+    }
+
+    try {
+      await GroupService.editGroup(
+        groupId: widget.group.id,
+        name: newName,
+        description: descController.text.trim(),
+      );
+      if (mounted) {
+        setState(() {
+          _groupName = newName;
+          _groupDescription = descController.text.trim();
+        });
+        _showTopSnackBar(
+          const SnackBar(
+            content: Text('Group updated'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(SnackBar(content: Text('Failed to update group: $e')));
+      }
+    }
+  }
+
+  /// Confirm + leave the group, then return to the previous screen.
+  Future<void> _confirmLeaveGroup() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        title: const Text(
+          'Leave Group',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Are you sure you want to leave this group?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await GroupService.leaveGroup(widget.group.id);
+      if (mounted) {
+        _showTopSnackBar(
+          const SnackBar(
+            content: Text('You left the group'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(SnackBar(content: Text('Failed to leave group: $e')));
+      }
+    }
   }
 
   /// Copy group message to clipboard
@@ -4272,15 +5293,150 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _resetGroupColorLocally(); // Use local reset instead of group reset
   }
 
-  /// Export chat history
+  /// Export chat history to a .txt file in Downloads
   Future<void> _exportChat() async {
-    // TODO: Implement chat export for group chat
-    _showTopSnackBar(
-      const SnackBar(
-        content: Text('Chat export coming soon for group chats'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    try {
+      final hasStorageAccess = await _requestStorageAccessForFileOps();
+      if (!hasStorageAccess) return;
+
+      if (mounted) {
+        _showTopSnackBar(
+          const SnackBar(
+            content: Text('Preparing chat export...'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
+      final buffer = StringBuffer();
+      buffer.writeln('Group Chat Export');
+      buffer.writeln('Group: ${widget.group.name}');
+      buffer.writeln('Exported on: ${DateTime.now()}');
+      buffer.writeln('=' * 50);
+      buffer.writeln();
+
+      // _messages is in chronological order (oldest first).
+      String? lastDate;
+      for (final message in _messages) {
+        final messageDate = _formatExportDate(message.timestamp);
+        if (messageDate != lastDate) {
+          buffer.writeln();
+          buffer.writeln('--- $messageDate ---');
+          buffer.writeln();
+          lastDate = messageDate;
+        }
+
+        final senderName = message.senderId == _currentUserId
+            ? 'Me'
+            : (message.sender?.fullName ?? 'User ${message.senderId}');
+        final time = _formatExportTime(message.timestamp);
+
+        String messageContent;
+        if (message.isDeleted) {
+          messageContent = '[Message deleted]';
+        } else if (message.messageType == 'voice' ||
+            message.messageType == 'audio') {
+          messageContent = '[Voice message]';
+        } else if (message.messageType == 'image') {
+          messageContent = '[Image: ${message.fileName ?? "image"}]';
+        } else if (message.messageType == 'video') {
+          messageContent = '[Video: ${message.fileName ?? "video"}]';
+        } else if (message.messageType == 'file') {
+          messageContent = '[File: ${message.fileName ?? "file"}]';
+        } else {
+          messageContent = message.content;
+        }
+
+        buffer.writeln('[$time] $senderName: $messageContent');
+      }
+
+      buffer.writeln();
+      buffer.writeln('=' * 50);
+      buffer.writeln('End of export - ${_messages.length} messages');
+
+      final exportContent = buffer.toString();
+      final now = DateTime.now();
+      final fileName = _normalizeTextFileName(
+        'group_${widget.group.name.replaceAll(' ', '_')}_${now.day}-${now.month}-${now.year}.txt',
+      );
+
+      String savedLocation;
+      if (Platform.isAndroid) {
+        await _saveToAndroidDownloads(
+          fileName: fileName,
+          mimeType: 'text/plain',
+          bytes: utf8.encode(exportContent),
+        );
+        savedLocation = 'Downloads';
+      } else {
+        final downloadDir = await _resolveDownloadDirectory();
+        final savePath =
+            '${downloadDir.path}${Platform.pathSeparator}$fileName';
+        await File(savePath).writeAsString(exportContent, flush: true);
+        savedLocation = savePath;
+      }
+
+      if (mounted) {
+        _showTopSnackBar(
+          SnackBar(
+            content: Text('Chat saved to $savedLocation: $fileName'),
+            duration: const Duration(seconds: 3),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error exporting group chat: $e');
+      if (mounted) {
+        _showTopSnackBar(
+          SnackBar(
+            content: Text('Failed to export chat: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  bool _isSameDay(String a, String b) {
+    try {
+      final da = DateTime.parse(a).toLocal();
+      final db = DateTime.parse(b).toLocal();
+      return da.year == db.year && da.month == db.month && da.day == db.day;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  String _formatExportDate(String timestamp) {
+    try {
+      final dt = DateTime.parse(timestamp).toLocal();
+      return '${dt.month}/${dt.day}/${dt.year}';
+    } catch (_) {
+      return 'Unknown date';
+    }
+  }
+
+  String _formatExportTime(String timestamp) {
+    try {
+      final dt = DateTime.parse(timestamp).toLocal();
+      final hour = dt.hour;
+      final minute = dt.minute.toString().padLeft(2, '0');
+      final period = hour >= 12 ? 'PM' : 'AM';
+      final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+      return '$displayHour:$minute $period';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _normalizeTextFileName(String value) {
+    final sanitized = value
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final fallback = sanitized.isEmpty ? 'group_chat_export' : sanitized;
+    return fallback.toLowerCase().endsWith('.txt') ? fallback : '$fallback.txt';
   }
 
   /// Admin: Delete all messages in group
@@ -4310,30 +5466,46 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (confirmed != true) return;
 
     try {
-      // TODO: Implement delete all messages API call
-      _showTopSnackBar(
-        const SnackBar(
-          content: Text('Delete all messages coming soon'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      final deletedCount = await GroupService.deleteAllMessages(widget.group.id);
+
+      // Clear locally as well — the server also emits `all_messages_deleted`
+      // to every member, but socket delivery is not guaranteed.
+      if (mounted) {
+        setState(() {
+          _messages.clear();
+          _messageReactions.clear();
+          _messageTranslations.clear();
+        });
+      }
+      await ChatCacheService.clearGroupCache(widget.group.id);
+
+      if (mounted) {
+        _showTopSnackBar(
+          SnackBar(
+            content: Text('Deleted $deletedCount message(s)'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     } catch (e) {
       debugPrint('Error deleting all messages: $e');
       if (mounted) {
         _showTopSnackBar(
-          SnackBar(content: Text('Failed to delete messages: $e')),
+          SnackBar(
+            content: Text('Failed to delete messages: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
   }
 
   Widget _buildInputArea() {
-    final headerColor = const Color(0xFF1E293B); // Match group chat theme
-
     return Container(
       padding: const EdgeInsets.only(left: 12, right: 12, top: 0, bottom: 4),
       decoration: BoxDecoration(
-        color: headerColor,
+        color: _headerColor,
         border: const Border(
           top: BorderSide(color: Color(0xFF3D3D3D), width: 1),
         ),
@@ -4667,6 +5839,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       ),
                       child: const Text('Camera'),
                     ),
+                    // Paste
+                    ElevatedButton(
+                      onPressed: _pasteFromClipboard,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1D4ED8),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      child: const Text('Paste'),
+                    ),
                     // Voice Message
                     ElevatedButton(
                       onPressed: _showVoiceRecordingModal,
@@ -4762,6 +5956,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         ),
                       ),
                       child: const Text('Export Chat'),
+                    ),
+                    // Common Phrases
+                    ElevatedButton(
+                      onPressed: _showCommonPhrasesModal,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFEC4899),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      child: const Text('Common Phrases'),
                     ),
                     // Delete All Messages (admin only)
                     if (_currentUserIsAdmin)

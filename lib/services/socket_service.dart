@@ -124,9 +124,24 @@ class SocketService {
   // AI chat realtime sync
   final Map<String, Function(Map<String, dynamic>)> _aiChatSyncListeners = {};
 
+  // Group call listeners
+  final Map<String, Function(Map<String, dynamic>)> _groupCallInvitationListeners = {};
+  final Map<String, Function(Map<String, dynamic>)> _groupCallCancelledListeners = {};
+  // Raw event listeners — used by GroupCallService for mesh events
+  final Map<String, Map<String, Function(dynamic)>> _rawEventListeners = {};
+
   // ---------------------------------------------------------------------------
   // Keyed listener registration / removal helpers
   // ---------------------------------------------------------------------------
+
+  void addRawListener(String event, String key, Function(dynamic) callback) {
+    _rawEventListeners.putIfAbsent(event, () => {})[key] = callback;
+  }
+
+  void removeRawListener(String event, String key) {
+    _rawEventListeners[event]?.remove(key);
+  }
+
   void addListener(String event, String key, Function callback) {
     switch (event) {
       case 'messageReceived':
@@ -359,6 +374,12 @@ class SocketService {
         _groupNewMessageListeners[key] =
             callback as Function(Map<String, dynamic>);
         break;
+      case 'groupCallInvitation':
+        _groupCallInvitationListeners[key] = callback as Function(Map<String, dynamic>);
+        break;
+      case 'groupCallCancelled':
+        _groupCallCancelledListeners[key] = callback as Function(Map<String, dynamic>);
+        break;
     }
   }
 
@@ -547,6 +568,12 @@ class SocketService {
         // Remove from group new message listeners
         _groupNewMessageListeners.remove(key);
         break;
+      case 'groupCallInvitation':
+        _groupCallInvitationListeners.remove(key);
+        break;
+      case 'groupCallCancelled':
+        _groupCallCancelledListeners.remove(key);
+        break;
     }
   }
 
@@ -612,6 +639,13 @@ class SocketService {
     _groupTypingListeners.remove(key);
     // AI chat sync
     _aiChatSyncListeners.remove(key);
+    // Group call listeners
+    _groupCallInvitationListeners.remove(key);
+    _groupCallCancelledListeners.remove(key);
+    // Raw event listeners
+    for (final eventMap in _rawEventListeners.values) {
+      eventMap.remove(key);
+    }
   }
 
   // Broadcast helpers
@@ -927,6 +961,14 @@ class SocketService {
       } else if (event.toString().contains('color') ||
           event.toString().contains('group_color')) {
         debugPrint('🔍 [SOCKET DEBUG] Received event: $event with data: $data');
+      }
+      // Dispatch to raw event listeners (used by GroupCallService for mesh events)
+      final rawListeners = _rawEventListeners[event.toString()];
+      if (rawListeners != null && rawListeners.isNotEmpty) {
+        final payload = (data is Map) ? Map<String, dynamic>.from(data as Map) : <String, dynamic>{};
+        for (final cb in rawListeners.values.toList()) {
+          cb(payload);
+        }
       }
     });
 
@@ -1480,6 +1522,18 @@ class SocketService {
       debugPrint('🧪 [SOCKET DEBUG] Test response broadcast completed');
     });
 
+    // === Group call events ===
+
+    _socket!.on('group_call_invitation', (data) {
+      debugPrint('📞 Group call invitation: $data');
+      _broadcast(_groupCallInvitationListeners, data as Map<String, dynamic>);
+    });
+
+    _socket!.on('group_call_cancelled', (data) {
+      debugPrint('📴 Group call cancelled: $data');
+      _broadcast(_groupCallCancelledListeners, data as Map<String, dynamic>);
+    });
+
     // Debug: Catch-all listener for color-related events
     _socket!.onAny((event, data) {
       if (event.toString().toLowerCase().contains('color')) {
@@ -1872,6 +1926,55 @@ class SocketService {
     _groupReactionClearedListeners.clear();
     _groupMemberLeftListeners.clear();
     _groupMessageStatusUpdatedListeners.clear();
+    _groupCallInvitationListeners.clear();
+    _groupCallCancelledListeners.clear();
+    _rawEventListeners.clear();
     onSignal = null;
+  }
+
+  // === Group call methods ===
+
+  void joinGroupCall(String roomId, String username) {
+    emit('join_group_call', {'room_id': roomId, 'username': username});
+  }
+
+  void leaveGroupCall(String roomId, String username) {
+    emit('leave_group_call', {'room_id': roomId, 'username': username});
+  }
+
+  void inviteToGroupCall(String roomId, List<int> inviteeIds, List<String> inviteeUsernames) {
+    emit('invite_to_group_call', {
+      'room_id': roomId,
+      'invitees': inviteeIds,
+      'invitee_usernames': inviteeUsernames,
+    });
+  }
+
+  void respondToGroupCallInvitation(String roomId, int inviterId, String response) {
+    emit('group_call_invitation_response', {
+      'room_id': roomId,
+      'inviter_id': inviterId,
+      'response': response,
+    });
+  }
+
+  void meshJoin(String roomId, String peerId) {
+    emit('mesh_join', {'roomId': roomId, 'peerId': peerId});
+  }
+
+  void meshLeave(String roomId, String peerId) {
+    emit('mesh_leave', {'roomId': roomId, 'peerId': peerId});
+  }
+
+  void meshOffer(String roomId, String from, String to, Map<String, dynamic> sdp) {
+    emit('mesh_offer', {'roomId': roomId, 'from': from, 'to': to, 'sdp': sdp});
+  }
+
+  void meshAnswer(String roomId, String from, String to, Map<String, dynamic> sdp) {
+    emit('mesh_answer', {'roomId': roomId, 'from': from, 'to': to, 'sdp': sdp});
+  }
+
+  void meshIce(String roomId, String from, String to, Map<String, dynamic> candidate) {
+    emit('mesh_ice', {'roomId': roomId, 'from': from, 'to': to, 'candidate': candidate});
   }
 }

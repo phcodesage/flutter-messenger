@@ -163,7 +163,7 @@ class _SignInPageState extends State<SignInPage> {
                     value: remember,
                     onChanged: (v) => setState(() => remember = v ?? false),
                     checkColor: Colors.white,
-                    activeColor: const Color(0xFF00E5FF),
+                    activeColor: PrimaryButton.primaryBtn,
                     side: const BorderSide(color: Colors.white70),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,

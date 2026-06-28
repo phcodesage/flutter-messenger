@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart';
 import '../config/api_config.dart';
 import '../services/storage_service.dart';
+import 'message.dart';
 
 Map<String, dynamic> _normalizeGroupReactionsMap(dynamic value) {
   if (value == null) return {};
@@ -308,6 +309,17 @@ class GroupMessage {
   final Map<String, dynamic> reactions;
   final String? caption;
 
+  /// Delivery status for the shared chat bubble UI.
+  /// 'pending' | 'sent' | 'delivered' | 'read' | 'failed'. Groups don't track
+  /// per-recipient receipts the way 1:1 does, so server messages default to
+  /// 'sent'; optimistic messages start at 'pending' until confirmed.
+  final String status;
+
+  /// Local file path for optimistic media messages (before upload completes).
+  /// Lets the bubble show the picked image/video from disk during upload.
+  /// In-memory only — never persisted to JSON.
+  final String? localFilePath;
+
   GroupMessage({
     required this.id,
     required this.messageId,
@@ -327,7 +339,86 @@ class GroupMessage {
     this.replyPreview,
     this.reactions = const {},
     this.caption,
+    this.status = 'sent',
+    this.localFilePath,
   });
+
+  /// Returns a copy with the given fields replaced. Only non-null arguments
+  /// override existing values (cannot clear a field back to null).
+  GroupMessage copyWith({
+    int? id,
+    int? messageId,
+    int? groupId,
+    int? senderId,
+    GroupMessageSender? sender,
+    String? content,
+    String? messageType,
+    String? timestamp,
+    int? timestampMs,
+    bool? isDeleted,
+    String? fileUrl,
+    String? fileName,
+    int? fileSize,
+    String? fileType,
+    int? replyToId,
+    String? replyPreview,
+    Map<String, dynamic>? reactions,
+    String? caption,
+    String? status,
+    String? localFilePath,
+  }) {
+    return GroupMessage(
+      id: id ?? this.id,
+      messageId: messageId ?? this.messageId,
+      groupId: groupId ?? this.groupId,
+      senderId: senderId ?? this.senderId,
+      sender: sender ?? this.sender,
+      content: content ?? this.content,
+      messageType: messageType ?? this.messageType,
+      timestamp: timestamp ?? this.timestamp,
+      timestampMs: timestampMs ?? this.timestampMs,
+      isDeleted: isDeleted ?? this.isDeleted,
+      fileUrl: fileUrl ?? this.fileUrl,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
+      fileType: fileType ?? this.fileType,
+      replyToId: replyToId ?? this.replyToId,
+      replyPreview: replyPreview ?? this.replyPreview,
+      reactions: reactions ?? this.reactions,
+      caption: caption ?? this.caption,
+      status: status ?? this.status,
+      localFilePath: localFilePath ?? this.localFilePath,
+    );
+  }
+
+  /// Adapts this group message into the shared [Message] model so the 1:1
+  /// chat widgets (ChatMessageBubble, ChatMessageList, SwipeableMessage, …)
+  /// can render group messages unchanged. Group-only concepts (sender name,
+  /// per-member reactions) are surfaced separately by the group screen.
+  Message toMessage() {
+    return Message(
+      id: id,
+      senderId: senderId,
+      recipientId: groupId,
+      content: content,
+      messageType: messageType,
+      timestamp: timestamp,
+      timestampMs: timestampMs,
+      isRead: true,
+      status: status,
+      threadId: 'group_$groupId',
+      replyToId: replyToId,
+      replyPreview: replyPreview,
+      reactions: reactions,
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileType: fileType,
+      isDeleted: isDeleted,
+      caption: caption,
+      localFilePath: localFilePath,
+    );
+  }
 
   factory GroupMessage.fromJson(Map<String, dynamic> json) {
     try {
@@ -436,6 +527,7 @@ class GroupMessage {
         replyPreview: replyPreviewText,
         reactions: _normalizeGroupReactionsMap(json['reactions']),
         caption: caption,
+        status: json['status'] as String? ?? 'sent',
       );
     } catch (e, stackTrace) {
       debugPrint('❌ Error parsing GroupMessage: $e');
@@ -662,6 +754,7 @@ class GroupMessage {
       'reply_preview': replyPreview,
       'reactions': reactions,
       'caption': caption,
+      'status': status,
     };
   }
 

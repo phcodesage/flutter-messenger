@@ -583,6 +583,42 @@ class GroupService {
     }
   }
 
+  /// Delete all messages in a group (group admin or creator only)
+  static Future<int> deleteAllMessages(int groupId) async {
+    try {
+      final token = await StorageService.getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http
+          .delete(
+            Uri.parse(ApiConfig.getGroupMessagesUrl(groupId)),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(ApiConfig.connectionTimeout);
+
+      if (response.statusCode == 401) {
+        await AuthErrorHandler().handleAuthError(
+          message: 'Your session has expired. Please sign in again.',
+        );
+        throw Exception('Authentication failed');
+      }
+
+      if (response.statusCode != 200) {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to delete all messages');
+      }
+
+      final data = jsonDecode(response.body);
+      return (data['deleted_messages'] as int?) ?? 0;
+    } catch (e) {
+      debugPrint('Delete all group messages error: $e');
+      rethrow;
+    }
+  }
+
   /// Edit a message (sender only)
   static Future<void> editMessage({
     required int groupId,

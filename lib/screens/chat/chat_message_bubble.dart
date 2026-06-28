@@ -41,11 +41,19 @@ class ChatMessageBubble extends StatefulWidget {
     required this.buildReactionPills,
     required this.buildLinkifiedMessageText,
     required this.buildStatusIndicator,
+    this.senderName,
+    this.senderColor,
   });
 
   final Message message;
   final bool isSentByMe;
   final double scale;
+
+  /// Group chat only: name of the sender shown as a colored label at the top of
+  /// incoming bubbles (WhatsApp-style). Null/empty in 1:1 chat, where it is
+  /// never rendered so the layout is identical to before.
+  final String? senderName;
+  final Color? senderColor;
   final bool showTimestamps;
   final bool isSelected;
   final Map<int, Map<String, Set<String>>> messageReactions;
@@ -209,6 +217,14 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (!widget.isSentByMe &&
+                widget.senderName != null &&
+                widget.senderName!.isNotEmpty)
+              _buildSenderHeader(
+                widget.senderName!,
+                widget.senderColor,
+                widget.scale,
+              ),
             if (isPinnedExcalidraw)
               _buildPinnedExcalidrawLabel(widget.scale, excalidrawAccentColor),
             if (widget.message.replyToId != null ||
@@ -360,6 +376,23 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Group chat sender label at the top of an incoming bubble.
+  Widget _buildSenderHeader(String name, Color? color, double scale) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12 * scale, 6 * scale, 12 * scale, 0),
+      child: Text(
+        name,
+        style: TextStyle(
+          color: color ?? const Color(0xFFB794F6),
+          fontSize: 12.5 * scale,
+          fontWeight: FontWeight.w700,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
