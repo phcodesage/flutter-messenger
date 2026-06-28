@@ -4653,12 +4653,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  /// Apply a realtime event that carries the full updated message in
-  /// `message_data` (task mark/complete/unmark + excalidraw pin/unpin). We just
-  /// re-parse and replace the message.
+  /// Apply a realtime event that carries updated message state (task mark/complete/unmark + excalidraw pin/unpin).
   void _handleGroupMessageDataEvent(Map<String, dynamic> data) {
-    if (data['group_id'] != widget.group.id) return;
-    final mid = data['message_id'];
+    final gid = _eventGroupId(data);
+    if (gid != null && gid != widget.group.id) return;
+    final mid = data['message_id'] ?? data['id'];
     if (mid == null) return;
     final idx = _messages.indexWhere((m) => m.id == mid);
     if (idx == -1) return;
@@ -4670,8 +4669,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         );
         _notifyTaskModalChanged();
       } catch (e) {
-        debugPrint('Error applying group task event: $e');
+        debugPrint('Error applying group data event: $e');
       }
+    } else {
+      final existing = _messages[idx];
+      final isExcalPinned = data['is_excalidraw_link'] == true || data['excalidraw_pinned_at'] != null;
+      final isTaskCompleted = data['task_completed_at'] != null;
+      final isTask = data['is_task'] == true;
+      final updated = existing.copyWith(
+        isExcalidrawLink: isExcalPinned,
+        clearExcalidrawPinnedAt: !isExcalPinned,
+        excalidrawPinnedAt: data['excalidraw_pinned_at'] as String?,
+        isTask: isTask,
+        taskCompletedAt: data['task_completed_at'] as String?,
+        clearTaskCompletedAt: !isTaskCompleted,
+      );
+      _replaceGroupMessage(updated);
+      _notifyTaskModalChanged();
     }
   }
 
@@ -5725,6 +5739,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ? await GroupService.unpinExcalidraw(widget.group.id, message.id)
           : await GroupService.pinExcalidraw(widget.group.id, message.id);
       _replaceGroupMessage(updated);
+      _notifyTaskModalChanged();
     } catch (e) {
       if (mounted) {
         _showTopSnackBar(
@@ -5734,115 +5749,460 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  /// Bottom sheet listing pinned Excalidraw links in this group.
+  String _formatPinnedAt(String? pinnedAt) {
+    if (pinnedAt == null) return '';
+    try {
+      final dt = DateTime.parse(pinnedAt).toLocal();
+      String two(int n) => n.toString().padLeft(2, '0');
+
+      final dateStr = '${dt.year}-${two(dt.month)}-${two(dt.day)}';
+      final timeStr = '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+
+      final off = dt.timeZoneOffset;
+      final sign = off.isNegative ? '-' : '+';
+      final offH = off.inHours.abs();
+      final offM = off.inMinutes.abs() % 60;
+      final gmt = 'GMT$sign$offH${offM != 0 ? ':${two(offM)}' : ''}';
+
+      const weekdays = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ];
+      const months = [
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
+      ];
+      final longStr =
+          '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+
+      return '$dateStr $timeStr $gmt - $longStr';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Centered dialog listing pinned Excalidraw links in this group matching 1on1 chat.
   void _showGroupExcalidrawModal() {
-    showModalBottomSheet(
+    final mediaQuery = MediaQuery.of(context);
+    final topOffset = mediaQuery.padding.top + kToolbarHeight + 6;
+    final availableHeight = mediaQuery.size.height - topOffset - 10;
+    final maxDialogHeight = availableHeight > 240 ? availableHeight : 240.0;
+
+    showGeneralDialog(
       context: context,
-      backgroundColor: const Color(0xFF1E1E2E),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (sheetCtx) {
-        return StatefulBuilder(
-          builder: (sheetCtx, setSheetState) {
+      barrierDismissible: true,
+      barrierLabel: 'Excalidraw',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      transitionDuration: Duration.zero,
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -0.08),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return ValueListenableBuilder<int>(
+          valueListenable: _taskModalVersion,
+          builder: (context, _, child) {
             final pinned = _messages
                 .where((m) => m.excalidrawPinnedAt != null && !m.isDeleted)
                 .toList()
               ..sort((a, b) => b.timestampMs.compareTo(a.timestampMs));
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 12),
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(10, topOffset, 10, 10),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Material(
+                  color: Colors.transparent,
+                  child: SizedBox(
+                    height: maxDialogHeight,
+                    child: Container(
+                      clipBehavior: Clip.hardEdge,
                       decoration: BoxDecoration(
-                        color: Colors.grey[600],
-                        borderRadius: BorderRadius.circular(2),
+                        color: const Color(0xFF191729),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.35),
+                            blurRadius: 24,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
                       ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: Row(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.draw_outlined, color: Color(0xFFF97316)),
-                          SizedBox(width: 10),
-                          Text(
-                            'Pinned Excalidraw',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
+                          Container(
+                            padding: const EdgeInsets.fromLTRB(14, 14, 12, 12),
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFFF97316), Color(0xFFEA580C)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(20),
+                              ),
                             ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 34,
+                                  height: 34,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    Icons.draw_outlined,
+                                    color: Colors.white,
+                                    size: 19,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                const Text(
+                                  'Excalidraw',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Container(
+                                  margin: const EdgeInsets.only(right: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '${pinned.length} pinned',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                InkWell(
+                                  onTap: () => Navigator.pop(context),
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Container(
+                                    width: 30,
+                                    height: 30,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.08),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.close,
+                                      color: Colors.white70,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Divider(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            height: 1,
+                          ),
+                          Flexible(
+                            child: pinned.isEmpty
+                                ? Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 70,
+                                            height: 70,
+                                            decoration: BoxDecoration(
+                                              color: const Color(
+                                                0xFFF97316,
+                                              ).withValues(alpha: 0.16),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.draw,
+                                              color: Color(0xFFFB923C),
+                                              size: 34,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            'No pinned Excalidraw links',
+                                            style: TextStyle(
+                                              color: Colors.grey[300],
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            'Pin an Excalidraw link in chat to see it here',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: Colors.grey[500],
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    padding: const EdgeInsets.all(10),
+                                    itemCount: pinned.length,
+                                    itemBuilder: (context, index) {
+                                      final m = pinned[index];
+                                      final content = m.content;
+                                      final orderNumber = index + 1;
+                                      final rawTitle = (m.excalidrawTitle != null && m.excalidrawTitle!.trim().isNotEmpty)
+                                          ? m.excalidrawTitle!.trim()
+                                          : '';
+                                      final cardTitle = rawTitle.isNotEmpty
+                                          ? rawTitle
+                                          : 'Link #$orderNumber';
+                                      final extractedUrl = _extractExcalidrawUrl(content);
+                                      final displayText = (extractedUrl ?? content).trim().isEmpty
+                                          ? 'Excalidraw link'
+                                          : (extractedUrl ?? content).trim();
+                                      final openLink = () {
+                                        Navigator.pop(context);
+                                        if (extractedUrl != null) {
+                                          _openMessageUrl(extractedUrl);
+                                        }
+                                      };
+                                      return Container(
+                                        margin: const EdgeInsets.only(bottom: 10),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF252542),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: const Color(
+                                              0xFFF97316,
+                                            ).withValues(alpha: 0.45),
+                                          ),
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.draw_outlined,
+                                                    color: Color(0xFFFB923C),
+                                                    size: 18,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Expanded(
+                                                    child: Text(
+                                                      cardTitle,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 15,
+                                                        fontWeight: FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 8),
+                                              GestureDetector(
+                                                onTap: openLink,
+                                                child: Text(
+                                                  displayText,
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF93C5FD),
+                                                    fontSize: 14,
+                                                    height: 1.4,
+                                                    decoration:
+                                                        TextDecoration.underline,
+                                                    decorationColor: Color(
+                                                      0xFF93C5FD,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                _formatPinnedAt(m.excalidrawPinnedAt),
+                                                style: const TextStyle(
+                                                  color: Color(0xFFFBBF24),
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  height: 1.3,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: InkWell(
+                                                      onTap: openLink,
+                                                      borderRadius:
+                                                          BorderRadius.circular(8),
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              vertical: 9,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(
+                                                            0xFF2563EB,
+                                                          ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                8,
+                                                              ),
+                                                        ),
+                                                        child: const Row(
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .center,
+                                                          children: [
+                                                            Icon(
+                                                              Icons.open_in_new,
+                                                              color: Colors.white,
+                                                              size: 16,
+                                                            ),
+                                                            SizedBox(width: 6),
+                                                            Text(
+                                                              'Open',
+                                                              style: TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight.w600,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: InkWell(
+                                                      onTap: () async {
+                                                        await _toggleGroupExcalidrawPin(m);
+                                                      },
+                                                      borderRadius:
+                                                          BorderRadius.circular(8),
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              vertical: 9,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(
+                                                            0xFFDC2626,
+                                                          ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                8,
+                                                              ),
+                                                        ),
+                                                        child: const Row(
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .center,
+                                                          children: [
+                                                            Icon(
+                                                              Icons
+                                                                  .push_pin_outlined,
+                                                              color: Colors.white,
+                                                              size: 16,
+                                                            ),
+                                                            SizedBox(width: 6),
+                                                            Text(
+                                                              'Unpin',
+                                                              style: TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight.w600,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 10),
+                                              Center(
+                                                child: Text(
+                                                  '$orderNumber',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.w900,
+                                                    letterSpacing: 0.5,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
                           ),
                         ],
                       ),
                     ),
-                    const Divider(color: Color(0xFF2A2A3A), height: 16),
-                    if (pinned.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(28),
-                        child: Text(
-                          'No pinned Excalidraw boards.\nSend or long-press an excalidraw.com link to pin it.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white54, fontSize: 14),
-                        ),
-                      )
-                    else
-                      Flexible(
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: pinned.length,
-                          itemBuilder: (context, i) {
-                            final m = pinned[i];
-                            final url = _extractExcalidrawUrl(m.content);
-                            final title =
-                                (m.excalidrawTitle != null &&
-                                    m.excalidrawTitle!.trim().isNotEmpty)
-                                ? m.excalidrawTitle!.trim()
-                                : 'Excalidraw board';
-                            return ListTile(
-                              leading: const Icon(
-                                Icons.draw_outlined,
-                                color: Color(0xFFF97316),
-                              ),
-                              title: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              subtitle: Text(
-                                m.sender?.fullName ?? '',
-                                style: const TextStyle(
-                                  color: Colors.white38,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              onTap: url != null
-                                  ? () => _openMessageUrl(url)
-                                  : null,
-                              trailing: IconButton(
-                                icon: const Icon(
-                                  Icons.push_pin,
-                                  color: Color(0xFFF97316),
-                                  size: 20,
-                                ),
-                                tooltip: 'Unpin',
-                                onPressed: () async {
-                                  await _toggleGroupExcalidrawPin(m);
-                                  setSheetState(() {});
-                                },
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
               ),
             );
