@@ -874,9 +874,10 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
             );
             if (userId == removedUserId) {
               debugPrint(
-                '👋 Current user was removed from group $groupId, removing from list',
+                '👋 Current user left group $groupId, removing from list',
               );
-              // Current user was removed, remove group from list
+              // Current user left (group_member_left) — remove group from list.
+              // This also keeps the leaver's other devices in sync.
               setState(() {
                 final initialCount = _groups.length;
                 _groups.removeWhere((g) => g.id == groupId);
@@ -886,8 +887,8 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
               _filterUsers();
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('You were removed from a group'),
-                  backgroundColor: Colors.orange,
+                  content: Text('You left the group'),
+                  backgroundColor: Colors.green,
                 ),
               );
             } else {

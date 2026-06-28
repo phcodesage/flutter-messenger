@@ -280,6 +280,26 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
 
   List<Widget> _buildGroupActions(BuildContext context) {
     return [
+      if (onShowTasks != null)
+        _buildBadgeIcon(
+          context,
+          icon: Icons.task_alt,
+          count: taskCount,
+          color: const Color(0xFF14B8A6), // teal — matches 1:1 Tasks button
+          onPressed: onShowTasks!,
+          tooltip: 'Tasks',
+          scale: scale,
+        ),
+      if (onShowExcalidraw != null)
+        _buildBadgeIcon(
+          context,
+          icon: Icons.draw_outlined,
+          count: excalidrawCount,
+          color: const Color(0xFFF97316), // orange — matches 1:1 Excalidraw
+          onPressed: onShowExcalidraw!,
+          tooltip: 'Excalidraw',
+          scale: scale,
+        ),
       if (onCallVideo != null)
         IconButton(
           icon: Icon(Icons.videocam, color: Colors.white, size: 24 * scale),

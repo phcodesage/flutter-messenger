@@ -89,6 +89,19 @@ class ApiConfig {
       '$baseUrl$mobilePrefix/groups/$groupId/leave';
   static String getGroupMessagesUrl(int groupId) =>
       '$baseUrl$mobilePrefix/groups/$groupId/messages';
+  // Group message task endpoints (POST=mark, DELETE=unmark, /toggle=complete)
+  static String getGroupMessageTaskUrl(int groupId, int messageId) =>
+      '$baseUrl$mobilePrefix/groups/$groupId/messages/$messageId/task';
+  static String getGroupMessageTaskToggleUrl(int groupId, int messageId) =>
+      '$baseUrl$mobilePrefix/groups/$groupId/messages/$messageId/task/toggle';
+  // Tasks for a single group conversation (reuses /tasks/chat with a filter)
+  static String getGroupTasksUrl(int groupId) =>
+      '$baseUrl$mobilePrefix/tasks/chat?group_id=$groupId';
+  // Group message Excalidraw pin/unpin
+  static String getGroupExcalidrawPinUrl(int groupId, int messageId) =>
+      '$baseUrl$mobilePrefix/groups/$groupId/messages/$messageId/excalidraw/pin';
+  static String getGroupExcalidrawUnpinUrl(int groupId, int messageId) =>
+      '$baseUrl$mobilePrefix/groups/$groupId/messages/$messageId/excalidraw/unpin';
   static String getGroupMessageUrl(int groupId, int messageId) =>
       '$baseUrl$mobilePrefix/groups/$groupId/messages/$messageId';
   static String getGroupUploadUrl(int groupId) =>

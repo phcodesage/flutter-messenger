@@ -180,6 +180,8 @@ class _GroupsListScreenState extends State<GroupsListScreen> {
           '👋 [GROUPS LIST] Current user was removed from group $groupId',
         );
         // Current user was removed or left - remove from list
+        final voluntaryLeave =
+            data.containsKey('user_id') && !data.containsKey('group');
         setState(() {
           final initialCount = _groups.length;
           _groups.removeWhere((g) => g.id == groupId);
@@ -190,9 +192,13 @@ class _GroupsListScreenState extends State<GroupsListScreen> {
           _filterGroups();
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('You were removed from a group'),
-            backgroundColor: Colors.orange,
+          SnackBar(
+            content: Text(
+              voluntaryLeave
+                  ? 'You left the group'
+                  : 'You were removed from a group',
+            ),
+            backgroundColor: voluntaryLeave ? Colors.green : Colors.orange,
           ),
         );
       } else if (groupId != null) {
@@ -481,7 +487,7 @@ class _GroupsListScreenState extends State<GroupsListScreen> {
             ),
           Expanded(
             child: Text(
-              _getLastMessagePreview(lastMessage),
+              _getLastMessagePreview(lastMessage, group),
               style: TextStyle(
                 color: hasUnread ? Colors.white : Colors.grey[400],
                 fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
@@ -524,13 +530,22 @@ class _GroupsListScreenState extends State<GroupsListScreen> {
     return 'G';
   }
 
-  String _getLastMessagePreview(GroupMessage? message) {
+  String _getLastMessagePreview(GroupMessage? message, Group group) {
     if (message == null) {
       return 'No messages yet';
     }
 
     if (message.isDeleted) {
       return 'Message deleted';
+    }
+
+    if (message.messageType == 'system') {
+      String content = message.content;
+      final isSentByMe = message.senderId == _currentUserId || group.createdBy == _currentUserId;
+      if (isSentByMe && (content.contains('created the group') || content.contains('created this group') || content == 'You created this group')) {
+        return 'You created this group';
+      }
+      return content;
     }
 
     final senderName = message.sender?.firstName ?? 'Someone';

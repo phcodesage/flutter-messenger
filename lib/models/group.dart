@@ -320,6 +320,18 @@ class GroupMessage {
   /// In-memory only — never persisted to JSON.
   final String? localFilePath;
 
+  /// Task state (mirrors the 1:1 chat). A message can be flagged as a task and
+  /// later marked complete.
+  final bool isTask;
+  final String? taskCreatedAt;
+  final String? taskCompletedAt;
+
+  /// Excalidraw link state (mirrors the 1:1 chat). Excalidraw links auto-pin on
+  /// send and can be manually pinned/unpinned.
+  final bool isExcalidrawLink;
+  final String? excalidrawPinnedAt;
+  final String? excalidrawTitle;
+
   GroupMessage({
     required this.id,
     required this.messageId,
@@ -341,6 +353,12 @@ class GroupMessage {
     this.caption,
     this.status = 'sent',
     this.localFilePath,
+    this.isTask = false,
+    this.taskCreatedAt,
+    this.taskCompletedAt,
+    this.isExcalidrawLink = false,
+    this.excalidrawPinnedAt,
+    this.excalidrawTitle,
   });
 
   /// Returns a copy with the given fields replaced. Only non-null arguments
@@ -366,6 +384,14 @@ class GroupMessage {
     String? caption,
     String? status,
     String? localFilePath,
+    bool? isTask,
+    String? taskCreatedAt,
+    String? taskCompletedAt,
+    bool clearTaskCompletedAt = false,
+    bool? isExcalidrawLink,
+    String? excalidrawPinnedAt,
+    String? excalidrawTitle,
+    bool clearExcalidrawPinnedAt = false,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -388,6 +414,16 @@ class GroupMessage {
       caption: caption ?? this.caption,
       status: status ?? this.status,
       localFilePath: localFilePath ?? this.localFilePath,
+      isTask: isTask ?? this.isTask,
+      taskCreatedAt: taskCreatedAt ?? this.taskCreatedAt,
+      taskCompletedAt: clearTaskCompletedAt
+          ? null
+          : (taskCompletedAt ?? this.taskCompletedAt),
+      isExcalidrawLink: isExcalidrawLink ?? this.isExcalidrawLink,
+      excalidrawPinnedAt: clearExcalidrawPinnedAt
+          ? null
+          : (excalidrawPinnedAt ?? this.excalidrawPinnedAt),
+      excalidrawTitle: excalidrawTitle ?? this.excalidrawTitle,
     );
   }
 
@@ -417,6 +453,13 @@ class GroupMessage {
       isDeleted: isDeleted,
       caption: caption,
       localFilePath: localFilePath,
+      isTask: isTask,
+      taskCreatedAt: taskCreatedAt,
+      taskCompletedAt: taskCompletedAt,
+      isExcalidrawLink: isExcalidrawLink,
+      excalidrawPinnedAt: excalidrawPinnedAt,
+      isPinned: excalidrawPinnedAt != null,
+      pinnedAt: excalidrawPinnedAt,
     );
   }
 
@@ -528,6 +571,14 @@ class GroupMessage {
         reactions: _normalizeGroupReactionsMap(json['reactions']),
         caption: caption,
         status: json['status'] as String? ?? 'sent',
+        isTask: json['is_task'] as bool? ?? false,
+        taskCreatedAt: json['task_created_at'] as String?,
+        taskCompletedAt:
+            json['task_completed_at'] as String? ??
+            json['completed_at'] as String?,
+        isExcalidrawLink: json['is_excalidraw_link'] as bool? ?? false,
+        excalidrawPinnedAt: json['excalidraw_pinned_at'] as String?,
+        excalidrawTitle: json['excalidraw_title'] as String?,
       );
     } catch (e, stackTrace) {
       debugPrint('❌ Error parsing GroupMessage: $e');
@@ -755,6 +806,12 @@ class GroupMessage {
       'reactions': reactions,
       'caption': caption,
       'status': status,
+      'is_task': isTask,
+      'task_created_at': taskCreatedAt,
+      'task_completed_at': taskCompletedAt,
+      'is_excalidraw_link': isExcalidrawLink,
+      'excalidraw_pinned_at': excalidrawPinnedAt,
+      'excalidraw_title': excalidrawTitle,
     };
   }
 

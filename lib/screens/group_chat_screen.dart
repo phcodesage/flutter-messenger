@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
@@ -46,6 +47,7 @@ import 'chat/chat_date_separator.dart';
 import 'chat/swipeable_message.dart';
 import 'chat/chat_header.dart';
 import 'chat/chat_message_bubble.dart';
+import 'chat/chat_composer_panel.dart';
 import 'media_gallery_viewer.dart';
 
 /// Group chat screen for messaging in a group
@@ -68,6 +70,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _inputFocusNode = FocusNode();
+  final ScrollController _inputScrollController = ScrollController();
+
+  /// Tap recognizers created for linkified message URLs; disposed in dispose().
+  final List<TapGestureRecognizer> _linkRecognizers = [];
 
   List<GroupMessage> _messages = [];
   bool _isLoading = true;
@@ -109,6 +115,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // Translation state: { messageId: translatedText }
   final Map<int, String> _messageTranslations = {};
+
+  // Task modal version and state
+  final ValueNotifier<int> _taskModalVersion = ValueNotifier<int>(0);
+  String _taskFilter = 'pending';
+  final Map<int, GlobalKey> _messageItemKeys = {};
+  int? _bubbleFlashId;
+
+  void _notifyTaskModalChanged() {
+    _taskModalVersion.value = _taskModalVersion.value + 1;
+  }
 
   // Color customization (for group chat theme)
   Color _headerColor = const Color(0xFF4C1D95); // Default purple color
@@ -500,7 +516,167 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
     });
 
+    // Member added → show a "X was added to the group" system notice.
+    _socketService.addListener('groupMemberAdded', key, (data) {
+      if (_eventGroupId(data) != widget.group.id) return;
+      _handleMemberAdded(data);
+    });
+
+    // Member left / removed (both route to this bucket on the socket service).
+    _socketService.addListener('groupMemberLeft', key, (data) {
+      if (_eventGroupId(data) != widget.group.id) return;
+      _handleMemberLeftOrRemoved(data);
+    });
+
+    // Group disbanded/deleted (e.g. the creator left) → close the chat.
+    _socketService.addListener('groupDeleted', key, (data) {
+      if (_eventGroupId(data) != widget.group.id) return;
+      if (!mounted) return;
+      final by = (data['deleted_by'] as String?)?.trim();
+      _showTopSnackBar(
+        SnackBar(
+          content: Text(
+            by != null && by.isNotEmpty
+                ? 'This group was disbanded by $by'
+                : 'This group was disbanded',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      Navigator.of(context).pop();
+    });
+
+    // Task events (mark/add, complete, uncomplete/unmark) for this group.
+    _socketService.addListener('taskAdded', key, _handleGroupMessageDataEvent);
+    _socketService.addListener(
+      'taskCompleted',
+      key,
+      _handleGroupMessageDataEvent,
+    );
+    _socketService.addListener(
+      'taskUncompleted',
+      key,
+      _handleGroupMessageDataEvent,
+    );
+    // Excalidraw pin/unpin events for this group.
+    _socketService.addListener(
+      'excalidrawPinned',
+      key,
+      _handleGroupMessageDataEvent,
+    );
+    _socketService.addListener(
+      'excalidrawUnpinned',
+      key,
+      _handleGroupMessageDataEvent,
+    );
+
     debugPrint('🎨 [SETUP] All listeners registered for key: $key');
+  }
+
+  /// Resolve the group id from a member event payload (handles both the
+  /// top-level `group_id` and the nested `group.id` shapes the server sends).
+  int? _eventGroupId(Map<String, dynamic> data) {
+    final gid = data['group_id'];
+    if (gid is int) return gid;
+    final group = data['group'];
+    if (group is Map && group['id'] is int) return group['id'] as int;
+    return null;
+  }
+
+  /// Append an ephemeral system message bubble (e.g. "X left the group").
+  /// add/remove/leave are also persisted server-side, so the canonical copy
+  /// replaces this on the next message reload — no lasting duplicates.
+  void _appendSystemMessage(String text) {
+    final now = DateTime.now();
+    final tempId = now.millisecondsSinceEpoch;
+    final sys = GroupMessage(
+      id: tempId,
+      messageId: tempId,
+      groupId: widget.group.id,
+      senderId: 0,
+      content: text,
+      messageType: 'system',
+      timestamp: now.toUtc().toIso8601String(),
+      timestampMs: tempId,
+    );
+    if (!mounted) return;
+    setState(() {
+      // Guard against an identical consecutive notice (e.g. the event arriving
+      // twice) so we don't stack the same bubble.
+      if (_messages.isNotEmpty &&
+          _messages.last.messageType == 'system' &&
+          _messages.last.content == text) {
+        return;
+      }
+      _messages.add(sys);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients && _isAtBottom) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
+  }
+
+  void _handleMemberAdded(Map<String, dynamic> data) {
+    final group = data['group'];
+    if (group is Map && group['member_count'] is int) {
+      setState(() => _memberCount = group['member_count'] as int);
+    }
+    // Prefer the server-provided name; fall back to resolving the added ids
+    // against the group's member list.
+    String? name = (data['added_user_name'] as String?)?.trim();
+    if ((name == null || name.isEmpty) && group is Map) {
+      final ids = (data['added_user_ids'] as List?) ?? const [];
+      final members = (group['members'] as List?) ?? const [];
+      final names = <String>[];
+      for (final id in ids) {
+        for (final m in members) {
+          if (m is Map && (m['user_id'] == id || m['id'] == id)) {
+            final user = m['user'] is Map ? m['user'] as Map : m;
+            final full =
+                ('${user['first_name'] ?? ''} ${user['last_name'] ?? ''}')
+                    .trim();
+            names.add(full.isNotEmpty ? full : (user['username'] ?? 'Someone'));
+          }
+        }
+      }
+      if (names.isNotEmpty) name = names.join(', ');
+    }
+    _appendSystemMessage('${name ?? 'Someone'} was added to the group');
+  }
+
+  void _handleMemberLeftOrRemoved(Map<String, dynamic> data) {
+    final removedUserId = data['removed_user_id'];
+    if (removedUserId != null) {
+      // group_member_removed
+      if (removedUserId == _currentUserId) {
+        // The current user was removed by an admin — exit the chat.
+        if (mounted) {
+          _showTopSnackBar(
+            const SnackBar(
+              content: Text('You were removed from this group'),
+            ),
+          );
+          Navigator.of(context).pop();
+        }
+        return;
+      }
+      final group = data['group'];
+      if (group is Map && group['member_count'] is int) {
+        setState(() => _memberCount = group['member_count'] as int);
+      }
+      final name = (data['removed_user_name'] as String?)?.trim();
+      _appendSystemMessage('${name?.isNotEmpty == true ? name : 'A member'} left the group');
+    } else {
+      // group_member_left (not carried with a group payload)
+      final name = (data['user_name'] as String?)?.trim();
+      _appendSystemMessage(
+        '${name?.isNotEmpty == true ? name : 'A member'} left the group',
+      );
+      setState(() {
+        if (_memberCount > 0) _memberCount--;
+      });
+    }
   }
 
   Future<void> _loadMessages() async {
@@ -1479,14 +1655,32 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _scrollController.dispose();
     _audioPlayer.dispose();
     _inputFocusNode.dispose();
+    _inputScrollController.dispose();
     _typingHideTimer?.cancel();
     _typingEmitTimer?.cancel();
+    _taskModalVersion.dispose();
+    for (final r in _linkRecognizers) {
+      r.dispose();
+    }
+    _linkRecognizers.clear();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+    // Rebuild the per-message reaction map once per frame for the shared bubble.
+    final reactionsForUi = _groupReactionsForUi();
+    final taskCount = _messages.where((m) => m.isTask && !m.isDeleted).length;
+    final excalidrawCount = _messages
+        .where((m) => m.excalidrawPinnedAt != null && !m.isDeleted)
+        .length;
+    // Recreate URL tap recognizers fresh each frame; dispose the previous set
+    // (their TextSpans are discarded by this rebuild, so this is safe).
+    for (final r in _linkRecognizers) {
+      r.dispose();
+    }
+    _linkRecognizers.clear();
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFF2C2C2C),
@@ -1499,7 +1693,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         memberCount: _memberCount,
         onCallVideo: () => _startGroupCall('video'),
         onCallAudio: () => _startGroupCall('audio'),
-        onRingDoorbell: _ringDoorbell,
+        taskCount: taskCount,
+        onShowTasks: _showGroupTasksModal,
+        excalidrawCount: excalidrawCount,
+        onShowExcalidraw: _showGroupExcalidrawModal,
         onShowMembers: _showGroupMembersSheet,
         onShowSettings: _showGroupSettingsSheet,
       ),
@@ -1558,7 +1755,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       setState(() => _replyingToMessage = message);
                                       _inputFocusNode.requestFocus();
                                     },
-                                    child: _buildMessageBubble(message),
+                                    child: _buildSharedGroupBubble(
+                                      message,
+                                      isSentByMe,
+                                      reactionsForUi,
+                                    ),
                                   );
 
                             return Column(
@@ -1645,8 +1846,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   : const SizedBox.shrink(),
             ),
 
-            // Reply preview
-            if (_replyingToMessage != null) _buildReplyPreview(),
+            // Reply preview is rendered inside ChatComposerPanel below.
 
             // Common phrases quick bar (mobile-pinned phrases)
             CommonPhraseBar(
@@ -1666,119 +1866,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: _headerColor, // Use dynamic color
-      elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
-      ),
-      title: Row(
-        children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: const Color(0xFF00D9FF),
-            child: widget.group.avatarUrl != null
-                ? ClipOval(
-                    child: CachedImage(
-                      url: widget.group.avatarUrl!,
-                      width: 40,
-                      height: 40,
-                      fit: BoxFit.cover,
-                      placeholderColor: const Color(0xFF00D9FF),
-                      errorWidget: const Icon(
-                        Icons.group,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                  )
-                : const Icon(Icons.group, color: Colors.white, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _groupName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  '$_memberCount members',
-                  style: TextStyle(color: Colors.grey[300], fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        // Video call button
-        IconButton(
-          icon: const Icon(Icons.videocam, color: Colors.white),
-          onPressed: () => _startGroupCall('video'),
-          tooltip: 'Video Call',
-        ),
-        // Audio call button
-        IconButton(
-          icon: const Icon(Icons.call, color: Colors.white),
-          onPressed: () => _startGroupCall('audio'),
-          tooltip: 'Audio Call',
-        ),
-        // Doorbell button
-        IconButton(
-          icon: const Icon(Icons.notifications, color: Colors.white),
-          onPressed: () {
-            _ringDoorbell();
-          },
-          tooltip: 'Ring Doorbell',
-        ),
-        // More options menu
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert, color: Colors.white),
-          color: const Color(0xFF1E1E2E),
-          onSelected: (value) {
-            if (value == 'members') {
-              _showGroupMembersSheet();
-            } else if (value == 'settings') {
-              _showGroupSettingsSheet();
-            }
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'members',
-              child: Row(
-                children: [
-                  Icon(Icons.people, color: Colors.white, size: 20),
-                  SizedBox(width: 12),
-                  Text('Members', style: TextStyle(color: Colors.white)),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'settings',
-              child: Row(
-                children: [
-                  Icon(Icons.settings, color: Colors.white, size: 20),
-                  SizedBox(width: 12),
-                  Text('Group Settings', style: TextStyle(color: Colors.white)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 
@@ -1805,6 +1892,236 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ),
         );
       },
+    );
+  }
+
+  // === Shared bubble adapter (mirrors the 1:1 chat UI) ===
+
+  /// Palette used to color each sender's name label in group bubbles.
+  static const List<Color> _senderColors = [
+    Color(0xFF60A5FA),
+    Color(0xFF34D399),
+    Color(0xFFF472B6),
+    Color(0xFFFBBF24),
+    Color(0xFFA78BFA),
+    Color(0xFF22D3EE),
+    Color(0xFFF87171),
+    Color(0xFF4ADE80),
+    Color(0xFFE879F9),
+    Color(0xFFFB923C),
+  ];
+
+  Color _senderColorForId(int senderId) =>
+      _senderColors[senderId.abs() % _senderColors.length];
+
+  /// Build the reaction map the shared [ChatMessageBubble] expects:
+  /// { messageId: { emoji: {userId, ...} } }. Computed once per frame.
+  Map<int, Map<String, Set<String>>> _groupReactionsForUi() {
+    final result = <int, Map<String, Set<String>>>{};
+    for (final m in _messages) {
+      if (m.reactions.isEmpty) continue;
+      final byEmoji = <String, Set<String>>{};
+      m.reactions.forEach((emoji, users) {
+        if (users is List) {
+          byEmoji[emoji] = users.map((u) => u.toString()).toSet();
+        }
+      });
+      if (byEmoji.isNotEmpty) result[m.id] = byEmoji;
+    }
+    return result;
+  }
+
+  /// Reaction pills shown below a bubble (same chip style as before).
+  Widget _buildGroupReactionPills(int messageId) {
+    GroupMessage? gm;
+    for (final m in _messages) {
+      if (m.id == messageId) {
+        gm = m;
+        break;
+      }
+    }
+    if (gm == null || gm.reactions.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 4,
+      children: gm.reactions.entries.map((entry) {
+        final emoji = entry.key;
+        final users = entry.value as List;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF420796), width: 1),
+          ),
+          child: Text(
+            '$emoji ${users.length}',
+            style: const TextStyle(fontSize: 12, color: Colors.white),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  void _showGroupReactionPicker(
+    BuildContext context,
+    int messageId,
+    Offset position,
+  ) {
+    GroupMessage? gm;
+    for (final m in _messages) {
+      if (m.id == messageId) {
+        gm = m;
+        break;
+      }
+    }
+    if (gm == null) return;
+    final target = gm;
+    ReactionPicker.show(
+      context: context,
+      position: position,
+      onReactionSelected: (emoji) => _addReaction(target, emoji),
+    );
+  }
+
+  /// Map the group status to the indicator vocabulary used by the 1:1 chat.
+  String _statusForUi(Message message) {
+    final s = message.status;
+    if (s == 'read') return 'seen';
+    return s;
+  }
+
+  /// Message delivery status icon (matches the 1:1 chat).
+  Widget _buildStatusIndicator(String status, [double scale = 1.0]) {
+    switch (status) {
+      case 'sent':
+        return Icon(Icons.check, size: 16 * scale, color: Colors.white70);
+      case 'delivered':
+        return Icon(Icons.done_all, size: 16 * scale, color: Colors.white70);
+      case 'seen':
+        return Icon(
+          Icons.done_all,
+          size: 16 * scale,
+          color: const Color(0xFF00BCD4),
+        );
+      case 'failed':
+        return Icon(
+          Icons.error_outline,
+          size: 16 * scale,
+          color: const Color(0xFFEF4444),
+        );
+      default:
+        return Icon(Icons.schedule, size: 16 * scale, color: Colors.white54);
+    }
+  }
+
+  static final RegExp _messageUrlRegex = RegExp(
+    r'((?:https?:\/\/|www\.)[^\s]+)',
+    caseSensitive: false,
+  );
+
+  String _trimTrailingUrlCharacters(String url) {
+    var end = url.length;
+    const trailing = '.,!?;:)]}\'"';
+    while (end > 0 && trailing.contains(url[end - 1])) {
+      end--;
+    }
+    return url.substring(0, end);
+  }
+
+  Future<void> _openMessageUrl(String url) async {
+    var normalized = url;
+    if (!normalized.startsWith('http')) normalized = 'https://$normalized';
+    try {
+      final uri = Uri.parse(normalized);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {}
+  }
+
+  /// Linkified message text with tappable URLs (matches the 1:1 chat).
+  Widget _buildGroupLinkifiedText(String text) {
+    final baseStyle = const TextStyle(color: Colors.white, fontSize: 15);
+    final linkStyle = baseStyle.copyWith(
+      color: const Color(0xFF93C5FD),
+      decoration: TextDecoration.underline,
+      decorationColor: const Color(0xFF93C5FD),
+    );
+
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in _messageUrlRegex.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(
+          TextSpan(text: text.substring(cursor, match.start), style: baseStyle),
+        );
+      }
+      final matchedText = match.group(0) ?? '';
+      final cleanedUrl = _trimTrailingUrlCharacters(matchedText);
+      final trailing = matchedText.substring(cleanedUrl.length);
+      if (cleanedUrl.isNotEmpty) {
+        final recognizer = TapGestureRecognizer()
+          ..onTap = () => _openMessageUrl(cleanedUrl);
+        _linkRecognizers.add(recognizer);
+        spans.add(
+          TextSpan(text: cleanedUrl, style: linkStyle, recognizer: recognizer),
+        );
+      }
+      if (trailing.isNotEmpty) {
+        spans.add(TextSpan(text: trailing, style: baseStyle));
+      }
+      cursor = match.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor), style: baseStyle));
+    }
+    if (spans.isEmpty) {
+      spans.add(TextSpan(text: text, style: baseStyle));
+    }
+    return Text.rich(TextSpan(children: spans));
+  }
+
+  /// Builds a group message using the shared [ChatMessageBubble] so the UI is
+  /// identical to the 1:1 chat. Group-only bits (sender name/color, per-member
+  /// reactions) are passed through the bubble's optional hooks.
+  Widget _buildSharedGroupBubble(
+    GroupMessage message,
+    bool isSentByMe,
+    Map<int, Map<String, Set<String>>> reactionsForUi,
+  ) {
+    return ChatMessageBubble(
+      message: message.toMessage(),
+      isSentByMe: isSentByMe,
+      scale: 1.0,
+      showTimestamps: _showTimestamps,
+      isSelected: _bubbleFlashId == message.id,
+      messageReactions: reactionsForUi,
+      messageTranslations: _messageTranslations,
+      onTapUp: (details) {
+        final hasUrl = _messageUrlRegex.hasMatch(message.content);
+        if (!hasUrl) {
+          _toggleTaskActionForMessage(message, details.globalPosition);
+        }
+      },
+      onLongPress: () => _showGroupMessageContextMenu(message, isSentByMe),
+      onShowReactionPicker: _showGroupReactionPicker,
+      onOpenMediaViewer: (_) => _openMediaViewer(message),
+      onDownloadIncomingFile: (_) => _downloadGroupIncomingFile(message),
+      onOpenMessageUrl: _openMessageUrl,
+      statusForUi: _statusForUi,
+      isOnlyFilename: _isOnlyFilename,
+      canQuickToggleExcalidrawPin: (m) => _isExcalidrawContent(m.content),
+      formatFileSize: _formatFileSize,
+      buildReactionPills: _buildGroupReactionPills,
+      buildLinkifiedMessageText:
+          ({
+            required String text,
+            required bool isTaskMessage,
+            required Color taskAccentColor,
+          }) => _buildGroupLinkifiedText(text),
+      buildStatusIndicator: _buildStatusIndicator,
+      senderName: isSentByMe ? null : message.sender?.fullName,
+      senderColor: _senderColorForId(message.senderId),
     );
   }
 
@@ -1843,6 +2160,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     // Handle system messages (doorbell notifications from others, etc.)
     if (message.messageType == 'system') {
+      String displayContent = message.content;
+      final isFromCreator = message.senderId == _currentUserId || widget.group.createdBy == _currentUserId;
+      if (isFromCreator && (displayContent.contains('created the group') || displayContent.contains('created this group') || displayContent == 'You created this group')) {
+        displayContent = 'You created this group';
+      }
       return Center(
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1852,7 +2174,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
-            message.content,
+            displayContent,
             style: const TextStyle(
               color: Colors.white70,
               fontSize: 13,
@@ -2635,67 +2957,39 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
   }
 
-  /// Open file URL (for downloads or external viewing)
-  /// Open full screen media viewer
+  /// Open the full-screen swipeable media gallery (mirrors the 1:1 chat).
+  /// Collects all image/video messages in the group so the user can swipe
+  /// between them, starting at the tapped message.
   void _openMediaViewer(GroupMessage message) {
     if (message.fileUrl == null) return;
 
-    final isVideo =
-        message.messageType == 'video' ||
-        (message.fileType?.startsWith('video/') ?? false);
+    final mediaMessages = _messages.where((m) {
+      if (m.isDeleted) return false;
+      if (m.fileUrl == null || m.fileUrl!.isEmpty) return false;
+      final isImage =
+          m.messageType == 'image' ||
+          (m.fileType?.startsWith('image/') ?? false);
+      final isVideo =
+          m.messageType == 'video' ||
+          (m.fileType?.startsWith('video/') ?? false);
+      return isImage || isVideo;
+    }).toList()..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
 
-    if (isVideo) {
-      // For video, show a snackbar
-      _showTopSnackBar(
-        SnackBar(
-          content: Text('Video: ${message.fileName ?? "Video"}'),
-          action: SnackBarAction(
-            label: 'Open',
-            onPressed: () {
-              // Could use url_launcher to open video URL
-            },
-          ),
+    if (mediaMessages.isEmpty) return;
+
+    final initialIndex = mediaMessages.indexWhere((m) => m.id == message.id);
+    if (initialIndex == -1) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => MediaGalleryViewer(
+          mediaMessages: mediaMessages.map((m) => m.toMessage()).toList(),
+          initialIndex: initialIndex,
+          currentUserId: _currentUserId ?? 0,
+          otherUserName: _groupName,
         ),
-      );
-    } else {
-      // Show image in full screen dialog
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: EdgeInsets.zero,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Dark background
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: Container(color: Colors.black87),
-              ),
-              // Image
-              Center(
-                child: InteractiveViewer(
-                  child: CachedImage(
-                    url: message.fileUrl!,
-                    fit: BoxFit.contain,
-                    placeholderColor: Colors.transparent,
-                  ),
-                ),
-              ),
-              // Close button
-              Positioned(
-                top: 40,
-                right: 16,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+      ),
+    );
   }
 
   /// Build audio player widget
@@ -4308,6 +4602,1256 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   /// Show context menu for group message
+  // === Group tasks ===
+
+  /// Whether a message can be marked as a task (mirrors the 1:1 chat's rules).
+  bool _canMarkGroupTask(GroupMessage message) {
+    if (message.isDeleted) return false;
+    const blocked = {
+      'system',
+      'call',
+      'doorbell',
+      'color_change',
+      'color_reset',
+    };
+    return !blocked.contains(message.messageType);
+  }
+
+  /// Replace a message in the list with an updated copy (e.g. after a task op).
+  void _replaceGroupMessage(GroupMessage updated) {
+    final idx = _messages.indexWhere((m) => m.id == updated.id);
+    if (idx == -1 || !mounted) return;
+    setState(() => _messages[idx] = updated);
+  }
+
+  Future<void> _toggleGroupTask(GroupMessage message) async {
+    try {
+      final updated = message.isTask
+          ? await GroupService.unmarkAsTask(widget.group.id, message.id)
+          : await GroupService.markAsTask(widget.group.id, message.id);
+      _replaceGroupMessage(updated);
+      _notifyTaskModalChanged();
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(SnackBar(content: Text('Failed to update task: $e')));
+      }
+    }
+  }
+
+  Future<void> _toggleGroupTaskComplete(GroupMessage message) async {
+    try {
+      final updated = await GroupService.toggleTaskComplete(
+        widget.group.id,
+        message.id,
+      );
+      _replaceGroupMessage(updated);
+      _notifyTaskModalChanged();
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(SnackBar(content: Text('Failed to update task: $e')));
+      }
+    }
+  }
+
+  /// Apply a realtime event that carries the full updated message in
+  /// `message_data` (task mark/complete/unmark + excalidraw pin/unpin). We just
+  /// re-parse and replace the message.
+  void _handleGroupMessageDataEvent(Map<String, dynamic> data) {
+    if (data['group_id'] != widget.group.id) return;
+    final mid = data['message_id'];
+    if (mid == null) return;
+    final idx = _messages.indexWhere((m) => m.id == mid);
+    if (idx == -1) return;
+    final md = data['message_data'];
+    if (md is Map) {
+      try {
+        _replaceGroupMessage(
+          GroupMessage.fromJson(Map<String, dynamic>.from(md)),
+        );
+        _notifyTaskModalChanged();
+      } catch (e) {
+        debugPrint('Error applying group task event: $e');
+      }
+    }
+  }
+
+  bool _canQuickToggleTaskAction(GroupMessage message) {
+    return message.messageType == 'text' && !message.isDeleted;
+  }
+
+  void _toggleTaskActionForMessage(GroupMessage message, Offset tapPosition) {
+    if (!_canQuickToggleTaskAction(message)) {
+      return;
+    }
+    _showTaskActionModal(message, tapPosition);
+  }
+
+  void _showTaskActionModal(GroupMessage message, Offset tapPosition) {
+    final overlayBox =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlaySize = overlayBox.size;
+    const verticalOffset = 44.0;
+    const menuWidth = 200.0;
+    const menuMargin = 8.0;
+
+    final menuTop = (tapPosition.dy - verticalOffset).clamp(
+      menuMargin,
+      overlaySize.height - menuMargin,
+    );
+
+    final menuLeft = (tapPosition.dx - menuWidth / 2).clamp(
+      menuMargin,
+      overlaySize.width - menuWidth - menuMargin,
+    );
+
+    final menuItems = _buildTaskActionMenuItems(message);
+    OverlayEntry? overlayEntry;
+
+    overlayEntry = OverlayEntry(
+      builder: (context) => GestureDetector(
+        onTap: () => overlayEntry?.remove(),
+        behavior: HitTestBehavior.translucent,
+        child: Container(
+          color: Colors.transparent,
+          child: Stack(
+            children: [
+              Positioned(
+                left: menuLeft,
+                top: menuTop,
+                child: Material(
+                  color: const Color(0xFF4C356A),
+                  elevation: 8,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: menuWidth,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: IntrinsicWidth(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: menuItems.map((item) {
+                          if (item is PopupMenuItem<void>) {
+                            return InkWell(
+                              onTap: () {
+                                overlayEntry?.remove();
+                                Future.microtask(() {
+                                  item.onTap?.call();
+                                });
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                                child: item.child ?? const SizedBox.shrink(),
+                              ),
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(overlayEntry);
+  }
+
+  List<PopupMenuEntry<void>> _buildTaskActionMenuItems(GroupMessage message) {
+    final items = <PopupMenuEntry<void>>[];
+
+    if (message.replyToId != null) {
+      items.add(
+        PopupMenuItem<void>(
+          onTap: () => _jumpToRepliedGroupMessage(message.replyToId!),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.arrow_upward_rounded,
+                color: Color(0xFF60A5FA),
+                size: 18,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'View replied message',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    items.add(
+      PopupMenuItem<void>(
+        onTap: () => _toggleGroupTask(message),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              message.isTask
+                  ? Icons.check_circle
+                  : Icons.radio_button_unchecked,
+              color: const Color(0xFFF59E0B),
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              message.isTask ? 'Unmark task' : 'Mark as task',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return items;
+  }
+
+  void _jumpToRepliedGroupMessage(int replyToId) {
+    final existing = _messages.firstWhere(
+      (m) => m.id == replyToId,
+      orElse: () => GroupMessage(
+        id: replyToId,
+        messageId: replyToId,
+        groupId: widget.group.id,
+        senderId: 0,
+        content: '',
+        messageType: 'text',
+        timestamp: DateTime.now().toIso8601String(),
+        timestampMs: 0,
+      ),
+    );
+    _doJumpToGroupTaskBubble(existing);
+  }
+
+  Future<void> _doJumpToGroupTaskBubble(GroupMessage task) async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _bubbleFlashId = task.id;
+    });
+
+    try {
+      final int index = _messages.indexWhere((m) => m.id == task.id);
+      if (index == -1 || !mounted || !_scrollController.hasClients) return;
+
+      await WidgetsBinding.instance.endOfFrame;
+      final ScrollPosition pos = _scrollController.position;
+
+      final double fracOffset = _messages.length > 1
+          ? (index / (_messages.length - 1)) * pos.maxScrollExtent
+          : 0.0;
+      final double jumpTarget = (fracOffset - pos.viewportDimension / 2 + 40)
+          .clamp(0.0, pos.maxScrollExtent);
+      _scrollController.jumpTo(jumpTarget);
+      await WidgetsBinding.instance.endOfFrame;
+
+      if (_messageItemKeys[task.id]?.currentContext == null) {
+        final double step = 400;
+        double sweep = 0;
+        while (sweep <= pos.maxScrollExtent && mounted) {
+          _scrollController.jumpTo(sweep.clamp(0.0, pos.maxScrollExtent));
+          await WidgetsBinding.instance.endOfFrame;
+          if (_messageItemKeys[task.id]?.currentContext != null) break;
+          sweep += step;
+        }
+      }
+
+      if (!mounted) return;
+      final BuildContext? ctx = _messageItemKeys[task.id]?.currentContext;
+      if (ctx == null) return;
+      final RenderObject? ro = ctx.findRenderObject();
+      if (ro == null || !ro.attached) return;
+
+      final double revealOffset = RenderAbstractViewport.of(ro)
+          .getOffsetToReveal(ro, 0.5)
+          .offset
+          .clamp(
+            _scrollController.position.minScrollExtent,
+            _scrollController.position.maxScrollExtent,
+          );
+
+      _scrollController.jumpTo(revealOffset);
+    } finally {
+      Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _bubbleFlashId = null);
+      });
+    }
+  }
+
+  int _getGroupCrossAxisCount(double width) {
+    if (width > 900) return 4;
+    if (width > 600) return 3;
+    return 2;
+  }
+
+  void _showGroupTasksModal() {
+    final mediaQuery = MediaQuery.of(context);
+    final topOffset = mediaQuery.padding.top + kToolbarHeight + 4;
+    final bottomOffset = 80.0;
+    final availableHeight = mediaQuery.size.height - topOffset - bottomOffset;
+    final maxDialogHeight = availableHeight > 200 ? availableHeight : 200.0;
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Tasks',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      transitionDuration: Duration.zero,
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -0.08),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return ValueListenableBuilder<int>(
+          valueListenable: _taskModalVersion,
+          builder: (context, _, child) {
+            final allTasks =
+                _messages.where((m) => m.isTask && !m.isDeleted).toList();
+            final pendingTasks =
+                allTasks.where((t) => t.taskCompletedAt == null).toList();
+            final completedTasks =
+                allTasks.where((t) => t.taskCompletedAt != null).toList();
+            return Padding(
+              padding: EdgeInsets.fromLTRB(10, topOffset, 10, 10),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    constraints: BoxConstraints(maxHeight: maxDialogHeight),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A2B),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFFBBF24).withValues(alpha: 0.65),
+                        width: 1.2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          blurRadius: 24,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [Color(0xFF2B2B48), Color(0xFF1F1F34)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(20),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: const Color(
+                                    0xFFF59E0B,
+                                  ).withValues(alpha: 0.2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(
+                                      0xFFF59E0B,
+                                    ).withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.check_circle_outline,
+                                  color: Color(0xFFFBBF24),
+                                  size: 16,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Group Tasks',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(
+                                    0xFFF59E0B,
+                                  ).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: const Color(
+                                      0xFFF59E0B,
+                                    ).withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                child: Text(
+                                  '${completedTasks.length}/${allTasks.length}',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFCD34D),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              InkWell(
+                                onTap: () => Navigator.pop(context),
+                                borderRadius: BorderRadius.circular(16),
+                                child: Container(
+                                  width: 26,
+                                  height: 26,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.08),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.close,
+                                    color: Colors.white70,
+                                    size: 16,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Divider(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          height: 1,
+                        ),
+                        Flexible(
+                          child: allTasks.isEmpty
+                              ? Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 24,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 50,
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            color: const Color(
+                                              0xFFF59E0B,
+                                            ).withValues(alpha: 0.14),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.task_alt,
+                                            color: Color(0xFFFBBF24),
+                                            size: 26,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          'No tasks yet',
+                                          style: TextStyle(
+                                            color: Colors.grey[300],
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Tap a message bubble, then tap "Mark as task"',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color: Colors.grey[500],
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              : StatefulBuilder(
+                                  builder: (context, setModalState) {
+                                    final displayTasks =
+                                        _taskFilter == 'pending'
+                                            ? pendingTasks
+                                            : completedTasks;
+                                    final otherText = _taskFilter == 'pending'
+                                        ? 'Completed'
+                                        : 'Pending';
+
+                                    return Column(
+                                      children: [
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF1A1A2B),
+                                            border: Border(
+                                              bottom: BorderSide(
+                                                color: Colors.white.withValues(
+                                                  alpha: 0.08,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          padding: const EdgeInsets.fromLTRB(
+                                            12,
+                                            8,
+                                            12,
+                                            8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                _taskFilter == 'pending'
+                                                    ? Icons.circle_outlined
+                                                    : Icons.check_circle,
+                                                color: _taskFilter == 'pending'
+                                                    ? Colors.grey[600]
+                                                    : const Color(0xFF22C55E),
+                                                size: 14,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                _taskFilter == 'pending'
+                                                    ? 'Pending'
+                                                    : 'Completed',
+                                                style: TextStyle(
+                                                  color: Colors.grey[300],
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w600,
+                                                  letterSpacing: 0.2,
+                                                ),
+                                              ),
+                                              const Spacer(),
+                                              InkWell(
+                                                onTap: () {
+                                                  setModalState(() {
+                                                    _taskFilter =
+                                                        _taskFilter == 'pending'
+                                                            ? 'completed'
+                                                            : 'pending';
+                                                  });
+                                                },
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 5,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                          alpha: 0.08,
+                                                        ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          999,
+                                                        ),
+                                                    border: Border.all(
+                                                      color: Colors.white
+                                                          .withValues(
+                                                            alpha: 0.15,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Icon(
+                                                        _taskFilter == 'pending'
+                                                            ? Icons.check_circle
+                                                            : Icons
+                                                                .circle_outlined,
+                                                        color:
+                                                            _taskFilter ==
+                                                                    'pending'
+                                                                ? const Color(
+                                                                    0xFF22C55E,
+                                                                  )
+                                                                : Colors.grey[600],
+                                                        size: 12,
+                                                      ),
+                                                      const SizedBox(width: 5),
+                                                      Text(
+                                                        otherText,
+                                                        style: TextStyle(
+                                                          color: Colors
+                                                              .grey[300],
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 7,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey.withValues(
+                                                    alpha: 0.15,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                        999,
+                                                      ),
+                                                ),
+                                                child: Text(
+                                                  '${displayTasks.length}',
+                                                  style: TextStyle(
+                                                    color: Colors.grey[400],
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8),
+                                            child: GridView.builder(
+                                              padding: EdgeInsets.zero,
+                                              gridDelegate:
+                                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                                    crossAxisCount:
+                                                        _getGroupCrossAxisCount(
+                                                          MediaQuery.of(
+                                                            context,
+                                                          ).size.width,
+                                                        ),
+                                                    crossAxisSpacing: 8,
+                                                    mainAxisSpacing: 8,
+                                                    childAspectRatio: 1.3,
+                                                  ),
+                                              itemCount: displayTasks.length,
+                                              itemBuilder: (context, index) {
+                                                final isCompleted =
+                                                    _taskFilter == 'completed';
+                                                final taskNumber =
+                                                    allTasks.indexOf(
+                                                      displayTasks[index],
+                                                    ) +
+                                                    1;
+                                                return _buildGroupTaskCard(
+                                                  displayTasks[index],
+                                                  isCompleted,
+                                                  taskNumber,
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showGroupTaskDetail(GroupMessage task, bool isCompleted) {
+    final isSentByMe = task.senderId == _currentUserId;
+    final senderLabel =
+        isSentByMe ? 'You' : (task.sender?.fullName ?? 'Member');
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetCtx) {
+        bool localCompleted = isCompleted;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2B),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFFFBBF24).withValues(alpha: 0.45),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 24,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[600],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: localCompleted
+                                ? const Color(
+                                    0xFF22C55E,
+                                  ).withValues(alpha: 0.15)
+                                : const Color(
+                                    0xFFF59E0B,
+                                  ).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: localCompleted
+                                  ? const Color(
+                                      0xFF22C55E,
+                                    ).withValues(alpha: 0.5)
+                                  : const Color(
+                                      0xFFF59E0B,
+                                    ).withValues(alpha: 0.5),
+                            ),
+                          ),
+                          child: Text(
+                            localCompleted ? 'Completed' : 'Pending Task',
+                            style: TextStyle(
+                              color: localCompleted
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFFFBBF24),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () => Navigator.pop(sheetCtx),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            width: 26,
+                            height: 26,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.08),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white70,
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      task.content.trim().isNotEmpty
+                          ? task.content.trim()
+                          : (task.fileName ?? 'Attachment Task'),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.person_outline,
+                          size: 14,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Created by $senderLabel',
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              setSheetState(
+                                () => localCompleted = !localCompleted,
+                              );
+                              await _toggleGroupTaskComplete(task);
+                            },
+                            icon: Icon(
+                              localCompleted
+                                  ? Icons.radio_button_unchecked
+                                  : Icons.check_circle,
+                              color: localCompleted
+                                  ? Colors.grey[400]
+                                  : const Color(0xFF22C55E),
+                            ),
+                            label: Text(
+                              localCompleted ? 'Unmark' : 'Complete',
+                              style: TextStyle(
+                                color: localCompleted
+                                    ? Colors.grey[400]
+                                    : const Color(0xFF22C55E),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(
+                                color: localCompleted
+                                    ? Colors.grey.withValues(alpha: 0.3)
+                                    : const Color(
+                                        0xFF22C55E,
+                                      ).withValues(alpha: 0.5),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(sheetCtx);
+                              Navigator.pop(context);
+                              _doJumpToGroupTaskBubble(task);
+                            },
+                            icon: const Icon(
+                              Icons.my_location,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                            label: const Text(
+                              'Jump to bubble',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF7C3AED),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupTaskCard(
+    GroupMessage task,
+    bool isCompleted,
+    int taskNumber,
+  ) {
+    const accentColors = [
+      Color(0xFF8B5CF6),
+      Color(0xFF3B82F6),
+      Color(0xFF10B981),
+      Color(0xFFF59E0B),
+      Color(0xFFEF4444),
+      Color(0xFF06B6D4),
+      Color(0xFFEC4899),
+      Color(0xFFF97316),
+    ];
+    final accent = accentColors[(taskNumber - 1) % accentColors.length];
+    final labelColor = isCompleted ? const Color(0xFF22C55E) : accent;
+
+    final bool isImageTask =
+        task.messageType == 'image' ||
+        (task.fileType?.startsWith('image/') ?? false);
+    final String? thumbUrl =
+        (task.fileUrl != null && task.fileUrl!.isNotEmpty)
+        ? (task.fileUrl!.startsWith('http')
+            ? task.fileUrl!
+            : '${ApiConfig.baseUrl}${task.fileUrl!}')
+        : null;
+    final bool showThumb = isImageTask && thumbUrl != null;
+    final String contentLabel = task.content.isNotEmpty
+        ? task.content
+        : (task.fileName ?? (isImageTask ? 'Image' : 'File'));
+
+    return GestureDetector(
+      onTap: () => _showGroupTaskDetail(task, isCompleted),
+      child: AnimatedContainer(
+        duration: Duration.zero,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2C2C2E),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isCompleted
+                ? const Color(0xFF22C55E).withValues(alpha: 0.5)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: labelColor,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(12),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 5, 8, 0),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Task #$taskNumber',
+                        style: TextStyle(
+                          color: labelColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      const Spacer(),
+                      InkWell(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: contentLabel));
+                          _showTopSnackBar(
+                            const SnackBar(
+                              content: Text('Copied to clipboard'),
+                              duration: Duration(milliseconds: 1200),
+                            ),
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(10),
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.copy_rounded,
+                            size: 11,
+                            color: Colors.white.withValues(alpha: 0.4),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+                    child: showThumb
+                        ? Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: Image.network(
+                                  thumbUrl,
+                                  width: 44,
+                                  height: 44,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    width: 44,
+                                    height: 44,
+                                    color: Colors.grey[800],
+                                    child: const Icon(
+                                      Icons.image_not_supported,
+                                      size: 18,
+                                      color: Colors.white38,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  contentLabel,
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: isCompleted
+                                        ? Colors.white54
+                                        : Colors.grey[200],
+                                    fontSize: 11,
+                                    height: 1.3,
+                                    decoration: isCompleted
+                                        ? TextDecoration.lineThrough
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : Text(
+                            contentLabel,
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: isCompleted
+                                  ? Colors.white54
+                                  : Colors.grey[200],
+                              fontSize: 11,
+                              height: 1.3,
+                              decoration: isCompleted
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // === Group Excalidraw ===
+
+  static final RegExp _excalidrawUrlRegex = RegExp(
+    r'((?:https?:\/\/)?(?:www\.)?excalidraw\.com[^\s]*)',
+    caseSensitive: false,
+  );
+
+  /// Extract the first excalidraw.com URL from message content, if any.
+  String? _extractExcalidrawUrl(String content) {
+    for (final match in _excalidrawUrlRegex.allMatches(content)) {
+      final raw = match.group(0);
+      if (raw == null || raw.isEmpty) continue;
+      final cleaned = _trimTrailingUrlCharacters(raw);
+      if (cleaned.isEmpty) continue;
+      final normalized = cleaned.toLowerCase().startsWith('http')
+          ? cleaned
+          : 'https://$cleaned';
+      final uri = Uri.tryParse(normalized);
+      if (uri != null && uri.host.toLowerCase().contains('excalidraw.com')) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  bool _isExcalidrawContent(String content) =>
+      _extractExcalidrawUrl(content) != null;
+
+  Future<void> _toggleGroupExcalidrawPin(GroupMessage message) async {
+    try {
+      final updated = message.excalidrawPinnedAt != null
+          ? await GroupService.unpinExcalidraw(widget.group.id, message.id)
+          : await GroupService.pinExcalidraw(widget.group.id, message.id);
+      _replaceGroupMessage(updated);
+    } catch (e) {
+      if (mounted) {
+        _showTopSnackBar(
+          SnackBar(content: Text('Failed to update Excalidraw pin: $e')),
+        );
+      }
+    }
+  }
+
+  /// Bottom sheet listing pinned Excalidraw links in this group.
+  void _showGroupExcalidrawModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (sheetCtx, setSheetState) {
+            final pinned = _messages
+                .where((m) => m.excalidrawPinnedAt != null && !m.isDeleted)
+                .toList()
+              ..sort((a, b) => b.timestampMs.compareTo(a.timestampMs));
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[600],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Row(
+                        children: [
+                          Icon(Icons.draw_outlined, color: Color(0xFFF97316)),
+                          SizedBox(width: 10),
+                          Text(
+                            'Pinned Excalidraw',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(color: Color(0xFF2A2A3A), height: 16),
+                    if (pinned.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(28),
+                        child: Text(
+                          'No pinned Excalidraw boards.\nSend or long-press an excalidraw.com link to pin it.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white54, fontSize: 14),
+                        ),
+                      )
+                    else
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: pinned.length,
+                          itemBuilder: (context, i) {
+                            final m = pinned[i];
+                            final url = _extractExcalidrawUrl(m.content);
+                            final title =
+                                (m.excalidrawTitle != null &&
+                                    m.excalidrawTitle!.trim().isNotEmpty)
+                                ? m.excalidrawTitle!.trim()
+                                : 'Excalidraw board';
+                            return ListTile(
+                              leading: const Icon(
+                                Icons.draw_outlined,
+                                color: Color(0xFFF97316),
+                              ),
+                              title: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              subtitle: Text(
+                                m.sender?.fullName ?? '',
+                                style: const TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              onTap: url != null
+                                  ? () => _openMessageUrl(url)
+                                  : null,
+                              trailing: IconButton(
+                                icon: const Icon(
+                                  Icons.push_pin,
+                                  color: Color(0xFFF97316),
+                                  size: 20,
+                                ),
+                                tooltip: 'Unpin',
+                                onPressed: () async {
+                                  await _toggleGroupExcalidrawPin(m);
+                                  setSheetState(() {});
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showGroupMessageContextMenu(GroupMessage message, bool isSentByMe) {
     showModalBottomSheet(
       context: context,
@@ -4355,6 +5899,62 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   onTap: () {
                     Navigator.pop(context);
                     _openForwardPicker(message);
+                  },
+                ),
+              // Mark / Unmark as Task
+              if (_canMarkGroupTask(message))
+                ListTile(
+                  leading: Icon(
+                    message.isTask ? Icons.remove_done : Icons.task_alt,
+                    color: const Color(0xFF14B8A6),
+                  ),
+                  title: Text(
+                    message.isTask ? 'Unmark Task' : 'Mark as Task',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _toggleGroupTask(message);
+                  },
+                ),
+              // Complete / Reopen a task
+              if (!message.isDeleted && message.isTask)
+                ListTile(
+                  leading: Icon(
+                    message.taskCompletedAt != null
+                        ? Icons.undo
+                        : Icons.check_circle_outline,
+                    color: const Color(0xFF22C55E),
+                  ),
+                  title: Text(
+                    message.taskCompletedAt != null
+                        ? 'Mark Incomplete'
+                        : 'Mark Complete',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _toggleGroupTaskComplete(message);
+                  },
+                ),
+              // Pin / Unpin Excalidraw (for messages containing an excalidraw link)
+              if (!message.isDeleted && _isExcalidrawContent(message.content))
+                ListTile(
+                  leading: Icon(
+                    message.excalidrawPinnedAt != null
+                        ? Icons.push_pin_outlined
+                        : Icons.push_pin,
+                    color: const Color(0xFFF97316),
+                  ),
+                  title: Text(
+                    message.excalidrawPinnedAt != null
+                        ? 'Unpin Excalidraw'
+                        : 'Pin Excalidraw',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _toggleGroupExcalidrawPin(message);
                   },
                 ),
               // Translate option (for incoming text messages)
@@ -4985,41 +6585,179 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (dctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E2E),
-        title: const Text(
-          'Edit Group Info',
-          style: TextStyle(color: Colors.white),
+        backgroundColor: const Color(0xFF1F1F33),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: 0.12),
+            width: 1.2,
+          ),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        title: Row(
           children: [
-            TextField(
-              controller: nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Group name',
-                labelStyle: TextStyle(color: Colors.white54),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00D9FF).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.edit_note_rounded,
+                color: Color(0xFF00D9FF),
+                size: 24,
               ),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: descController,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Description',
-                labelStyle: TextStyle(color: Colors.white54),
+            const SizedBox(width: 12),
+            const Text(
+              'Edit Group Info',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ],
         ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'GROUP NAME',
+                style: TextStyle(
+                  color: Color(0xFF00D9FF),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: nameController,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: 'Enter group name',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: const Color(0xFF141424),
+                  prefixIcon: const Icon(
+                    Icons.group_outlined,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.15),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.15),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF00D9FF),
+                      width: 1.5,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'DESCRIPTION',
+                style: TextStyle(
+                  color: Color(0xFF00D9FF),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: descController,
+                maxLines: 3,
+                minLines: 1,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: 'Add group description',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: const Color(0xFF141424),
+                  prefixIcon: const Icon(
+                    Icons.description_outlined,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.15),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.15),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF00D9FF),
+                      width: 1.5,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white70,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
+              ),
+            ),
+            child: const Text('Cancel', style: TextStyle(fontSize: 15)),
           ),
-          TextButton(
+          ElevatedButton(
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('Save'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4C1D95),
+              foregroundColor: Colors.white,
+              elevation: 2,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 10,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: const Text(
+              'Save',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -5063,17 +6801,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Confirm + leave the group, then return to the previous screen.
   Future<void> _confirmLeaveGroup() async {
+    // The creator can't just leave — leaving disbands the group for everyone.
+    final isCreator = widget.group.createdBy == _currentUserId;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E2E),
-        title: const Text(
-          'Leave Group',
-          style: TextStyle(color: Colors.white),
+        title: Text(
+          isCreator ? 'Disband Group' : 'Leave Group',
+          style: const TextStyle(color: Colors.white),
         ),
-        content: const Text(
-          'Are you sure you want to leave this group?',
-          style: TextStyle(color: Colors.white70),
+        content: Text(
+          isCreator
+              ? 'You created this group, so leaving will disband it and delete '
+                    'it for everyone. Continue?'
+              : 'Are you sure you want to leave this group?',
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
@@ -5083,7 +6826,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           TextButton(
             onPressed: () => Navigator.pop(dctx, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Leave'),
+            child: Text(isCreator ? 'Disband' : 'Leave'),
           ),
         ],
       ),
@@ -5091,11 +6834,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (confirmed != true) return;
 
     try {
+      // The backend disbands the group when the creator calls leave.
       await GroupService.leaveGroup(widget.group.id);
       if (mounted) {
         _showTopSnackBar(
-          const SnackBar(
-            content: Text('You left the group'),
+          SnackBar(
+            content: Text(isCreator ? 'Group disbanded' : 'You left the group'),
             backgroundColor: Colors.green,
           ),
         );
@@ -5103,7 +6847,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
     } catch (e) {
       if (mounted) {
-        _showTopSnackBar(SnackBar(content: Text('Failed to leave group: $e')));
+        _showTopSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to ${isCreator ? 'disband' : 'leave'} group: $e',
+            ),
+          ),
+        );
       }
     }
   }
@@ -5501,516 +7251,332 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  Widget _buildInputArea() {
-    return Container(
-      padding: const EdgeInsets.only(left: 12, right: 12, top: 0, bottom: 4),
-      decoration: BoxDecoration(
-        color: _headerColor,
-        border: const Border(
-          top: BorderSide(color: Color(0xFF3D3D3D), width: 1),
+  // === Shared composer (mirrors the 1:1 chat input area) ===
+
+  /// Estimate whether the composed text wraps onto more than one line so the
+  /// composer can expand (matches the 1:1 chat).
+  bool _isComposerMultiline(String text, TextStyle style, double maxWidth) {
+    if (text.trim().isEmpty) return false;
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: 6,
+    );
+    painter.layout(maxWidth: maxWidth < 1 ? 1 : maxWidth);
+    return painter.computeLineMetrics().length > 1;
+  }
+
+  /// Composer text changed: sanitize emoji + emit throttled typing indicator.
+  void _onGroupComposerTextChanged(String text) {
+    final normalizedText = _normalizeTextForEmojiCompatibility(text);
+    if (normalizedText != text) {
+      _replaceInputTextWithSanitized(normalizedText);
+      return;
+    }
+    _typingEmitTimer?.cancel();
+    _typingEmitTimer = Timer(const Duration(milliseconds: 150), () {
+      _socketService.sendGroupTyping(widget.group.id, text);
+    });
+  }
+
+  /// Handle rich content inserted by the soft keyboard (image/GIF paste).
+  Future<void> _onGroupContentInserted(KeyboardInsertedContent content) async {
+    final data = content.data;
+    if (data == null || data.isEmpty) return;
+    try {
+      final ext = content.mimeType.split('/').last;
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}/pasted_${DateTime.now().millisecondsSinceEpoch}.$ext',
+      );
+      await file.writeAsBytes(data);
+      await _uploadFile(file);
+    } catch (e) {
+      debugPrint('Error handling inserted content: $e');
+    }
+  }
+
+  /// Doorbell button shown inside the composer (matches the 1:1 chat).
+  Widget _buildGroupDoorbellComposerButton({
+    required bool showLabel,
+    required double iconSize,
+    required EdgeInsetsGeometry padding,
+  }) {
+    final fixedHeight = iconSize + 12;
+    return Tooltip(
+      message: 'Ring Doorbell',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _ringDoorbell,
+          borderRadius: BorderRadius.circular(999),
+          splashColor: Colors.white.withValues(alpha: 0.20),
+          highlightColor: Colors.white.withValues(alpha: 0.10),
+          child: Container(
+            height: fixedHeight,
+            padding: showLabel
+                ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6)
+                : padding,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: showLabel ? BoxShape.rectangle : BoxShape.circle,
+              borderRadius: showLabel ? BorderRadius.circular(999) : null,
+            ),
+            child: showLabel
+                ? const Center(
+                    widthFactor: 1,
+                    child: Text(
+                      'Ring Doorbell',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  )
+                : Icon(
+                    Icons.notifications_active_outlined,
+                    color: Colors.black,
+                    size: iconSize,
+                  ),
+          ),
         ),
       ),
+    );
+  }
+
+  /// Compact colored action chip (same style as the 1:1 chat action bar).
+  Widget _groupActionChip({
+    required String label,
+    required Color backgroundColor,
+    required VoidCallback onPressed,
+  }) {
+    return Material(
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onPressed();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          height: 40,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              height: 1.1,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.visible,
+            softWrap: true,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _insertGroupName() {
+    final raw = _groupName.trim();
+    if (raw.isEmpty) return;
+    final text = _messageController.text;
+    final sel = _messageController.selection;
+    final int start = sel.isValid ? sel.start : text.length;
+    final int end = sel.isValid ? sel.end : text.length;
+    final before = text.substring(0, start);
+    final after = text.substring(end);
+    final spaceBefore =
+        (before.isEmpty || RegExp(r'\s$').hasMatch(before)) ? '' : ' ';
+    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
+    final spaceAfter = inputIsEmpty
+        ? ' '
+        : ((after.isEmpty || RegExp(r'^\s').hasMatch(after)) ? '' : ' ');
+    final inserted = '$spaceBefore$raw$spaceAfter';
+    final newText = '$before$inserted$after';
+    final newCaret = start + inserted.length;
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newCaret),
+    );
+  }
+
+  void _showAutoCorrectionModal() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Auto Correction is active'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Two-row group action bar shown above the composer (mirrors 1:1 / self chat).
+  Widget _buildGroupUnifiedActionsBar() {
+    final nameParts = _groupName.trim().split(' ');
+    final nameLabel = nameParts.first;
+
+    final topRow = <Widget>[
+      _groupActionChip(
+        label: 'Send\nFile',
+        backgroundColor: const Color(0xFF16A34A),
+        onPressed: _pickFile,
+      ),
+      _groupActionChip(
+        label: 'Voice\nMessage',
+        backgroundColor: const Color(0xFFEF4444),
+        onPressed: _showVoiceRecordingModal,
+      ),
+      _groupActionChip(
+        label: 'Auto\nCorrection',
+        backgroundColor: const Color(0xFFF59E0B),
+        onPressed: _showAutoCorrectionModal,
+      ),
+      _groupActionChip(
+        label: 'Common\nPhrases',
+        backgroundColor: const Color(0xFFEC4899),
+        onPressed: _showCommonPhrasesModal,
+      ),
+      _groupActionChip(
+        label: _autoTranslate ? 'Translate\nOn' : 'Translate\nOff',
+        backgroundColor: const Color(0xFFC026D3),
+        onPressed: _toggleAutoTranslate,
+      ),
+    ];
+    final bottomRow = <Widget>[
+      _groupActionChip(
+        label: nameLabel.isEmpty ? 'Group' : nameLabel,
+        backgroundColor: const Color(0xFF0F766E),
+        onPressed: _insertGroupName,
+      ),
+      _groupActionChip(
+        label: 'Paste',
+        backgroundColor: const Color(0xFF1D4ED8),
+        onPressed: _pasteFromClipboard,
+      ),
+      _groupActionChip(
+        label: 'Export\nChat',
+        backgroundColor: const Color(0xFF6B7280),
+        onPressed: _exportChat,
+      ),
+      _groupActionChip(
+        label: 'Change\nColor',
+        backgroundColor: const Color(0xFF9333EA),
+        onPressed: _changeColor,
+      ),
+      if (_showResetButton)
+        _groupActionChip(
+          label: 'Reset\nColor',
+          backgroundColor: const Color(0xFF6B7280),
+          onPressed: _resetColor,
+        ),
+      _groupActionChip(
+        label: _showTimestamps ? 'Hide\nTimestamps' : 'Show\nTimestamps',
+        backgroundColor: const Color(0xFF4F46E5),
+        onPressed: _toggleTimestamps,
+      ),
+      if (_currentUserIsAdmin)
+        _groupActionChip(
+          label: 'Delete\nMessages',
+          backgroundColor: const Color(0xFF6D28D9),
+          onPressed: _adminDeleteAllMessages,
+        ),
+    ];
+
+    Widget fittedRow(List<Widget> buttons) {
+      if (buttons.isEmpty) return const SizedBox.shrink();
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          const gap = 3.0;
+          final totalGap = gap * (buttons.length - 1);
+          var itemWidth = (constraints.maxWidth - totalGap) / buttons.length;
+          if (itemWidth < 48.0) {
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (int i = 0; i < buttons.length; i++) ...[
+                    SizedBox(width: 48.0, child: buttons[i]),
+                    if (i < buttons.length - 1) const SizedBox(width: gap),
+                  ],
+                ],
+              ),
+            );
+          }
+          return Row(
+            children: [
+              for (int i = 0; i < buttons.length; i++) ...[
+                SizedBox(width: itemWidth, child: buttons[i]),
+                if (i < buttons.length - 1) const SizedBox(width: gap),
+              ],
+            ],
+          );
+        },
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Reply preview (when replying to a message)
-          if (_replyingToMessage != null) _buildReplyPreview(),
-
-          // Text input field with embedded emoji button and send button
-          RepaintBoundary(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Actions toggle icon (hidden when input focused or has text)
-                if (!_inputFocusNode.hasFocus &&
-                    _messageController.text.isEmpty)
-                  Container(
-                    margin: const EdgeInsets.only(right: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3D3D3D),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: IconButton(
-                      onPressed: () => setState(
-                        () => _showActionButtons = !_showActionButtons,
-                      ),
-                      icon: Icon(
-                        _showActionButtons
-                            ? Icons.expand_more
-                            : Icons.add_circle_outline,
-                        color: Colors.white70,
-                        size: 18,
-                      ),
-                      padding: const EdgeInsets.all(6),
-                      constraints: const BoxConstraints(),
-                      tooltip: _showActionButtons
-                          ? 'Hide Actions'
-                          : 'Show Actions',
-                    ),
-                  ),
-                // Text input field with embedded emoji button
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2A2F3A),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        // Emoji picker button (inside input) - toggles between emoji/keyboard icon
-                        IconButton(
-                          onPressed: () => _showEmojiPickerModal(context),
-                          icon: Icon(
-                            _showEmojiPicker
-                                ? Icons.keyboard_outlined
-                                : Icons.sentiment_satisfied_alt_outlined,
-                            color: Colors.white70,
-                            size: 18,
-                          ),
-                          padding: const EdgeInsets.all(4),
-                          constraints: const BoxConstraints(),
-                          tooltip: _showEmojiPicker ? 'Keyboard' : 'Emoji',
-                        ),
-                        // Text input
-                        Expanded(
-                          child: TextField(
-                            key: const ValueKey('message_input'),
-                            controller: _messageController,
-                            focusNode: _inputFocusNode,
-                            dragStartBehavior: DragStartBehavior.start,
-                            cursorColor: const Color(0xFFCB6CFF),
-                            cursorWidth: 2.2,
-                            cursorRadius: const Radius.circular(2),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Type a message...',
-                              hintStyle: const TextStyle(
-                                color: Color(0xFFD7B7FF),
-                                fontSize: 14,
-                              ),
-                              border: InputBorder.none,
-                              filled: false,
-                              contentPadding: const EdgeInsets.only(
-                                left: 0,
-                                right: 4,
-                                top: 10,
-                                bottom: 10,
-                              ),
-                              isDense: true,
-                            ),
-                            onChanged: (text) {
-                              final normalizedText =
-                                  _normalizeTextForEmojiCompatibility(text);
-                              if (normalizedText != text) {
-                                _replaceInputTextWithSanitized(normalizedText);
-                                return;
-                              }
-
-                              setState(() {
-                                // Hide action buttons when typing
-                                if (text.isNotEmpty && _showActionButtons) {
-                                  _showActionButtons = false;
-                                }
-                              });
-
-                              // Emit typing indicator (throttled)
-                              _typingEmitTimer?.cancel();
-                              _typingEmitTimer = Timer(
-                                const Duration(milliseconds: 150),
-                                () {
-                                  debugPrint(
-                                    '🔍 [TYPING DEBUG] Socket connected: ${_socketService.isConnected}',
-                                  );
-                                  debugPrint(
-                                    '🔍 [TYPING DEBUG] Emitting typing for group ${widget.group.id} with text: "$text"',
-                                  );
-                                  _socketService.sendGroupTyping(
-                                    widget.group.id,
-                                    text,
-                                  );
-                                },
-                              );
-                            },
-                            minLines: 1,
-                            maxLines: 5,
-                            textInputAction: TextInputAction.newline,
-                            keyboardType: TextInputType.multiline,
-                            textCapitalization: TextCapitalization.sentences,
-                            enableInteractiveSelection: true,
-                            autocorrect: true,
-                            enableSuggestions: true,
-                            scribbleEnabled: false,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // Clear (top) + Send (bottom) — always visible, vertically centred
-                IntrinsicWidth(
-                  child: Container(
-                    margin: const EdgeInsets.only(left: 6),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Clear button (top)
-                        ElevatedButton(
-                          onPressed: () {
-                            _messageController.clear();
-                            _stopGroupTyping(); // Stop typing indicator when clearing
-                            setState(() {
-                              _replyingToMessage = null;
-                            });
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFEF4444),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 3,
-                            ),
-                            minimumSize: const Size(0, 0),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text(
-                            'Clear',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        // Send button (bottom)
-                        ElevatedButton(
-                          onPressed: _sendMessage,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF6D28D9),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 3,
-                            ),
-                            minimumSize: const Size(0, 0),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text(
-                            'Send',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Inline emoji picker (shown when active)
-          if (_showEmojiPicker) _buildInlineEmojiPicker(),
-          // Collapsible action buttons panel
-          // Only show when emoji picker is closed AND keyboard is not visible
-          if (!_showEmojiPicker &&
-              MediaQuery.of(context).viewInsets.bottom == 0) ...[
-            // All action buttons (shown/hidden by toggle)
-            if (_showActionButtons)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    // Ring Doorbell
-                    ElevatedButton(
-                      onPressed: _ringDoorbell,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF8B5CF6),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Ring Doorbell'),
-                    ),
-                    // Change Color
-                    ElevatedButton(
-                      onPressed: _changeColor,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFA855F7),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Change Color'),
-                    ),
-                    // Reset Color button (only show when color has been changed)
-                    if (_showResetButton)
-                      ElevatedButton(
-                        onPressed: _resetColor,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black87,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          minimumSize: const Size(0, 0),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          textStyle: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        child: const Text('Reset Color'),
-                      ),
-                    // Send File
-                    ElevatedButton(
-                      onPressed: _pickFile,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Send File'),
-                    ),
-                    // Camera
-                    ElevatedButton(
-                      onPressed: _takePhoto,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF3B82F6),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Camera'),
-                    ),
-                    // Paste
-                    ElevatedButton(
-                      onPressed: _pasteFromClipboard,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1D4ED8),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Paste'),
-                    ),
-                    // Voice Message
-                    ElevatedButton(
-                      onPressed: _showVoiceRecordingModal,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFEF4444),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Voice Message'),
-                    ),
-                    // Auto-Translate
-                    ElevatedButton(
-                      onPressed: _toggleAutoTranslate,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _autoTranslate
-                            ? const Color(0xFF059669)
-                            : const Color(0xFF0891B2),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: Text(
-                        _autoTranslate ? 'Translate: ON' : 'Translate: OFF',
-                      ),
-                    ),
-                    // Show Timestamps
-                    ElevatedButton(
-                      onPressed: _toggleTimestamps,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _showTimestamps
-                            ? const Color(0xFF4F46E5)
-                            : const Color(0xFF8B5CF6),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: Text(
-                        _showTimestamps ? 'Hide Timestamps' : 'Show Timestamps',
-                      ),
-                    ),
-                    // Export Chat
-                    ElevatedButton(
-                      onPressed: _exportChat,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF6B7280),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Export Chat'),
-                    ),
-                    // Common Phrases
-                    ElevatedButton(
-                      onPressed: _showCommonPhrasesModal,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFEC4899),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      child: const Text('Common Phrases'),
-                    ),
-                    // Delete All Messages (admin only)
-                    if (_currentUserIsAdmin)
-                      ElevatedButton(
-                        onPressed: _adminDeleteAllMessages,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFDC2626),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          minimumSize: const Size(0, 0),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          textStyle: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [SizedBox(width: 4), Text('Delete All')],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-          ],
+          fittedRow(topRow),
+          const SizedBox(height: 2),
+          fittedRow(bottomRow),
         ],
       ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ChatComposerPanel(
+          scale: 1.0,
+          backgroundColor: const Color(0xFF161625),
+          composerInset: 0,
+          showEmojiPicker: _showEmojiPicker,
+          isEditing: false,
+          onShowEmojiPickerModal: () => _showEmojiPickerModal(context),
+          onClipboardPasteShortcut: _pasteFromClipboard,
+          onInputContextMenuOpened: () {},
+          onContentInserted: _onGroupContentInserted,
+          onTextChanged: _onGroupComposerTextChanged,
+          onSend: _sendMessage,
+          messageController: _messageController,
+          inputFocusNode: _inputFocusNode,
+          inputScrollController: _inputScrollController,
+          buildDoorbellComposerButton:
+              ({
+                required bool showLabel,
+                required double iconSize,
+                required EdgeInsets padding,
+              }) => _buildGroupDoorbellComposerButton(
+                showLabel: showLabel,
+                iconSize: iconSize,
+                padding: padding,
+              ),
+          isComposerMultiline: _isComposerMultiline,
+          editPreview: const SizedBox.shrink(),
+          replyPreview: _replyingToMessage != null
+              ? _buildReplyPreview()
+              : const SizedBox.shrink(),
+          sendToManyQuickAction: const SizedBox.shrink(),
+          unifiedActionsBar: _buildGroupUnifiedActionsBar(),
+        ),
+        // Inline emoji picker rendered below the composer when toggled.
+        if (_showEmojiPicker)
+          Container(
+            color: const Color(0xFF161625),
+            child: _buildInlineEmojiPicker(),
+          ),
+      ],
     );
   }
 }

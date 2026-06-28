@@ -828,4 +828,98 @@ class GroupService {
       rethrow;
     }
   }
+
+  // ── Group message tasks ────────────────────────────────────────────────────
+
+  static Future<Map<String, String>> _authHeaders() async {
+    final token = await StorageService.getToken();
+    if (token == null) throw Exception('No authentication token');
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+  }
+
+  static Future<GroupMessage> _taskRequest(
+    String method,
+    String url,
+    String failMsg,
+  ) async {
+    final headers = await _authHeaders();
+    final req = http.Request(method, Uri.parse(url))..headers.addAll(headers);
+    final streamed = await req.send().timeout(ApiConfig.connectionTimeout);
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 401) {
+      await AuthErrorHandler().handleAuthError(
+        message: 'Your session has expired. Please sign in again.',
+      );
+      throw Exception('Authentication failed');
+    }
+    if (response.statusCode != 200) {
+      final error = jsonDecode(response.body);
+      throw Exception(error['error'] ?? failMsg);
+    }
+    final data = jsonDecode(response.body);
+    return GroupMessage.fromJson(
+      Map<String, dynamic>.from(data['data'] as Map),
+    );
+  }
+
+  /// Mark a group message as a task.
+  static Future<GroupMessage> markAsTask(int groupId, int messageId) =>
+      _taskRequest(
+        'POST',
+        ApiConfig.getGroupMessageTaskUrl(groupId, messageId),
+        'Failed to mark as task',
+      );
+
+  /// Remove the task flag from a group message.
+  static Future<GroupMessage> unmarkAsTask(int groupId, int messageId) =>
+      _taskRequest(
+        'DELETE',
+        ApiConfig.getGroupMessageTaskUrl(groupId, messageId),
+        'Failed to unmark task',
+      );
+
+  /// Toggle completion of a group-message task.
+  static Future<GroupMessage> toggleTaskComplete(int groupId, int messageId) =>
+      _taskRequest(
+        'POST',
+        ApiConfig.getGroupMessageTaskToggleUrl(groupId, messageId),
+        'Failed to toggle task',
+      );
+
+  /// Pin a group message's Excalidraw link.
+  static Future<GroupMessage> pinExcalidraw(int groupId, int messageId) =>
+      _taskRequest(
+        'POST',
+        ApiConfig.getGroupExcalidrawPinUrl(groupId, messageId),
+        'Failed to pin Excalidraw link',
+      );
+
+  /// Unpin a group message's Excalidraw link.
+  static Future<GroupMessage> unpinExcalidraw(int groupId, int messageId) =>
+      _taskRequest(
+        'POST',
+        ApiConfig.getGroupExcalidrawUnpinUrl(groupId, messageId),
+        'Failed to unpin Excalidraw link',
+      );
+
+  /// Fetch all tasks for a group conversation.
+  static Future<List<Map<String, dynamic>>> getGroupTasks(int groupId) async {
+    try {
+      final headers = await _authHeaders();
+      final response = await http
+          .get(Uri.parse(ApiConfig.getGroupTasksUrl(groupId)), headers: headers)
+          .timeout(ApiConfig.connectionTimeout);
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body);
+      final tasks = data['tasks'] as List?;
+      return tasks?.cast<Map<String, dynamic>>() ?? [];
+    } catch (e) {
+      debugPrint('Get group tasks error: $e');
+      return [];
+    }
+  }
 }
