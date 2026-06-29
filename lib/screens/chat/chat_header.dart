@@ -33,6 +33,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     this.onRingDoorbell,
     this.onShowMembers,
     this.onShowSettings,
+    this.onExportChat,
   });
 
   final LobbyUser? otherUser;
@@ -61,6 +62,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onRingDoorbell;
   final VoidCallback? onShowMembers;
   final VoidCallback? onShowSettings;
+  final VoidCallback? onExportChat;
 
   bool get _isGroup => groupName != null;
 
@@ -207,6 +209,8 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
               onShowTasks?.call();
             } else if (value == 'excalidraw') {
               onShowExcalidraw?.call();
+            } else if (value == 'export') {
+              onExportChat?.call();
             }
           },
           itemBuilder: (context) => [
@@ -230,6 +234,17 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                 scale: s,
               ),
             ),
+            if (onExportChat != null)
+              PopupMenuItem(
+                value: 'export',
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.download_rounded,
+                  label: 'Export Chat',
+                  color: Colors.white,
+                  count: 0,
+                  scale: s,
+                ),
+              ),
           ],
         ),
       );
@@ -253,6 +268,28 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
           tooltip: 'Excalidraw',
           scale: s,
         ),
+        if (onExportChat != null)
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * s),
+            color: const Color(0xFF1E1E2E),
+            onSelected: (value) {
+              if (value == 'export') {
+                onExportChat?.call();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'export',
+                child: Row(
+                  children: [
+                    Icon(Icons.download_rounded, color: Colors.white, size: 20),
+                    SizedBox(width: 12),
+                    Text('Export Chat', style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            ],
+          ),
       ]);
     }
 
@@ -375,6 +412,8 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
               onShowMembers?.call();
             } else if (value == 'settings') {
               onShowSettings?.call();
+            } else if (value == 'export') {
+              onExportChat?.call();
             }
           },
           itemBuilder: (context) => [
@@ -428,6 +467,17 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                 child: _buildPopupMenuItemChild(
                   icon: Icons.settings,
                   label: 'Group Settings',
+                  color: Colors.white,
+                  count: 0,
+                  scale: s,
+                ),
+              ),
+            if (onExportChat != null)
+              PopupMenuItem(
+                value: 'export',
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.download_rounded,
+                  label: 'Export Chat',
                   color: Colors.white,
                   count: 0,
                   scale: s,
@@ -490,7 +540,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
           ),
         );
       }
-      if (onShowMembers != null || onShowSettings != null) {
+      if (onShowMembers != null || onShowSettings != null || onExportChat != null) {
         actions.add(
           PopupMenuButton<String>(
             icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * s),
@@ -500,6 +550,8 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                 onShowMembers?.call();
               } else if (value == 'settings') {
                 onShowSettings?.call();
+              } else if (value == 'export') {
+                onExportChat?.call();
               }
             },
             itemBuilder: (context) => [
@@ -523,6 +575,20 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                       SizedBox(width: 12),
                       Text(
                         'Group Settings',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              if (onExportChat != null)
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Row(
+                    children: [
+                      Icon(Icons.download_rounded, color: Colors.white, size: 20),
+                      SizedBox(width: 12),
+                      Text(
+                        'Export Chat',
                         style: TextStyle(color: Colors.white),
                       ),
                     ],

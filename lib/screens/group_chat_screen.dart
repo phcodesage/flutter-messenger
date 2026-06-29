@@ -50,6 +50,8 @@ import 'chat/chat_header.dart';
 import 'chat/chat_message_bubble.dart';
 import 'chat/chat_composer_panel.dart';
 import 'media_gallery_viewer.dart';
+import '../utils/chat_exporter.dart';
+import '../utils/file_saver.dart';
 
 /// Group chat screen for messaging in a group
 class GroupChatScreen extends StatefulWidget {
@@ -2165,6 +2167,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         onShowExcalidraw: _showGroupExcalidrawModal,
         onShowMembers: _showGroupMembersSheet,
         onShowSettings: _showGroupSettingsSheet,
+        onExportChat: _exportChat,
       ),
       body: GestureDetector(
         onTap: () => FocusScope.of(context).unfocus(),
@@ -8234,6 +8237,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+
+
   /// Copy group message to clipboard
   void _copyGroupMessageToClipboard(GroupMessage message) {
     Clipboard.setData(ClipboardData(text: message.content));
@@ -8422,103 +8427,47 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   /// Export chat history to a .txt file in Downloads
   Future<void> _exportChat() async {
     try {
-      final hasStorageAccess = await _requestStorageAccessForFileOps();
-      if (!hasStorageAccess) return;
-
-      if (mounted) {
-        _showTopSnackBar(
-          const SnackBar(
-            content: Text('Preparing chat export...'),
-            duration: Duration(seconds: 1),
-          ),
-        );
-      }
-
-      final buffer = StringBuffer();
-      buffer.writeln('Group Chat Export');
-      buffer.writeln('Group: ${widget.group.name}');
-      buffer.writeln('Exported on: ${DateTime.now()}');
-      buffer.writeln('=' * 50);
-      buffer.writeln();
-
-      // _messages is in chronological order (oldest first).
-      String? lastDate;
-      for (final message in _messages) {
-        final messageDate = _formatExportDate(message.timestamp);
-        if (messageDate != lastDate) {
-          buffer.writeln();
-          buffer.writeln('--- $messageDate ---');
-          buffer.writeln();
-          lastDate = messageDate;
-        }
-
-        final senderName = message.senderId == _currentUserId
-            ? 'Me'
-            : (message.sender?.fullName ?? 'User ${message.senderId}');
-        final time = _formatExportTime(message.timestamp);
-
-        String messageContent;
-        if (message.isDeleted) {
-          messageContent = '[Message deleted]';
-        } else if (message.messageType == 'voice' ||
-            message.messageType == 'audio') {
-          messageContent = '[Voice message]';
-        } else if (message.messageType == 'image') {
-          messageContent = '[Image: ${message.fileName ?? "image"}]';
-        } else if (message.messageType == 'video') {
-          messageContent = '[Video: ${message.fileName ?? "video"}]';
-        } else if (message.messageType == 'file') {
-          messageContent = '[File: ${message.fileName ?? "file"}]';
-        } else {
-          messageContent = message.content;
-        }
-
-        buffer.writeln('[$time] $senderName: $messageContent');
-      }
-
-      buffer.writeln();
-      buffer.writeln('=' * 50);
-      buffer.writeln('End of export - ${_messages.length} messages');
-
-      final exportContent = buffer.toString();
-      final now = DateTime.now();
-      final fileName = _normalizeTextFileName(
-        'group_${widget.group.name.replaceAll(' ', '_')}_${now.day}-${now.month}-${now.year}.txt',
+      final currentUserId = await StorageService.getUserId();
+      final currentUserName = await StorageService.getUsername() ?? 'Someone';
+      
+      final content = ChatExporter.formatChatExport(
+        messages: _messages,
+        currentUserId: currentUserId ?? 0,
+        currentUserName: currentUserName,
+      );
+      
+      final filename = 'chat_export_group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}.txt';
+      
+      _showTopSnackBar(
+        const SnackBar(content: Text('Exporting chat...')),
       );
 
-      String savedLocation;
-      if (Platform.isAndroid) {
-        await _saveToAndroidDownloads(
-          fileName: fileName,
-          mimeType: 'text/plain',
-          bytes: utf8.encode(exportContent),
-        );
-        savedLocation = 'Downloads';
-      } else {
-        final downloadDir = await _resolveDownloadDirectory();
-        final savePath =
-            '${downloadDir.path}${Platform.pathSeparator}$fileName';
-        await File(savePath).writeAsString(exportContent, flush: true);
-        savedLocation = savePath;
-      }
+      final path = await FileSaver.saveFile(
+        filename: filename,
+        content: content,
+      );
 
       if (mounted) {
         _showTopSnackBar(
           SnackBar(
-            content: Text('Chat saved to $savedLocation: $fileName'),
-            duration: const Duration(seconds: 3),
+            content: Text(path == 'browser_download' 
+                ? 'Chat exported successfully (check downloads)'
+                : 'Chat exported and saved to downloads'),
             backgroundColor: Colors.green,
           ),
         );
       }
+
+      // Send system message
+      await GroupService.sendMessage(
+        groupId: widget.group.id,
+        content: '$currentUserName exported the chat',
+        messageType: 'system',
+      );
     } catch (e) {
-      debugPrint('Error exporting group chat: $e');
       if (mounted) {
         _showTopSnackBar(
-          SnackBar(
-            content: Text('Failed to export chat: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Failed to export chat: $e'), backgroundColor: Colors.red),
         );
       }
     }

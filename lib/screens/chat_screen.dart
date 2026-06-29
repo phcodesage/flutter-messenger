@@ -51,6 +51,8 @@ import '../services/firebase_messaging_service.dart';
 import '../config/api_config.dart';
 import 'chat/chat_header.dart';
 import 'chat/chat_composer_panel.dart';
+import '../utils/chat_exporter.dart';
+import '../utils/file_saver.dart';
 import 'chat/chat_date_separator.dart';
 import 'chat/chat_message_item.dart';
 import 'chat/chat_message_bubble.dart';
@@ -3813,155 +3815,49 @@ class _ChatScreenState extends State<ChatScreen>
   /// Export chat to a text file
   Future<void> _exportChat() async {
     try {
-      final hasStorageAccess = await _requestStorageAccessForFileOps();
-      if (!hasStorageAccess) return;
-
-      // Show loading indicator
-      if (mounted) {
-        _showTopSnackBar(
-          const SnackBar(
-            content: Text('Preparing chat export...'),
-            duration: Duration(seconds: 1),
-          ),
-        );
-      }
-
-      // Build the export content
-      final buffer = StringBuffer();
-      final myName = 'Me';
-      final otherName = widget.otherUser.fullName;
-
-      buffer.writeln('Chat Export');
-      buffer.writeln('Conversation with: $otherName');
-      buffer.writeln('Exported on: ${DateTime.now().toString()}');
-      buffer.writeln('=' * 50);
-      buffer.writeln();
-
-      // Messages are reversed (newest first), so reverse them for export
-      final sortedMessages = _messages.reversed.toList();
-
-      String? lastDate;
-      for (final message in sortedMessages) {
-        // Add date separator if day changed
-        final messageDate = _formatExportDate(message.timestamp);
-        if (messageDate != lastDate) {
-          buffer.writeln();
-          buffer.writeln('--- $messageDate ---');
-          buffer.writeln();
-          lastDate = messageDate;
-        }
-
-        final senderName = message.senderId == _currentUserId
-            ? myName
-            : otherName;
-        final time = _formatExportTime(message.timestamp);
-        final content = message.isDeleted
-            ? '[Message deleted]'
-            : message.content;
-
-        // Handle different message types
-        String messageContent;
-        if (message.messageType == 'voice' || message.messageType == 'audio') {
-          messageContent = '[Voice message]';
-        } else if (message.messageType == 'image') {
-          messageContent = '[Image: ${message.fileName ?? "image"}]';
-        } else if (message.messageType == 'video') {
-          messageContent = '[Video: ${message.fileName ?? "video"}]';
-        } else if (message.messageType == 'file') {
-          messageContent = '[File: ${message.fileName ?? "file"}]';
-        } else {
-          messageContent = content;
-        }
-
-        buffer.writeln('[$time] $senderName: $messageContent');
-      }
-
-      buffer.writeln();
-      buffer.writeln('=' * 50);
-      buffer.writeln('End of export - ${sortedMessages.length} messages');
-
-      // Choose folder first, then filename (user-requested export flow).
-      final defaultFileName =
-          'chat_${widget.otherUser.fullName.replaceAll(' ', '_')}_${DateTime.now().day}-${DateTime.now().month}-${DateTime.now().year}.txt';
-      final selectedDirectory = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Select folder for chat export',
+      final currentUserId = await StorageService.getUserId();
+      final currentUserName = await StorageService.getUsername() ?? 'Someone';
+      final peerName = widget.otherUser.fullName;
+      
+      final content = ChatExporter.formatChatExport(
+        messages: _messages,
+        currentUserId: currentUserId ?? 0,
+        currentUserName: currentUserName,
+        peerName: peerName,
+      );
+      
+      final filename = 'chat_export_1to1_${widget.otherUser.id}_${DateTime.now().millisecondsSinceEpoch}.txt';
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Exporting chat...')),
       );
 
-      if (selectedDirectory == null || selectedDirectory.isEmpty) {
-        if (mounted) {
-          _showTopSnackBar(
-            const SnackBar(
-              content: Text('Export cancelled'),
-              duration: Duration(seconds: 1),
-            ),
-          );
-        }
-        return;
-      }
-
-      final normalizedFileName = _normalizeTextFileName(defaultFileName);
-      final savePath =
-          '$selectedDirectory${Platform.pathSeparator}$normalizedFileName';
-
-      final exportContent = buffer.toString();
-      String savedFileName = normalizedFileName;
-
-      try {
-        final exportFile = File(savePath);
-        await exportFile.writeAsString(exportContent, flush: true);
-      } on FileSystemException catch (e) {
-        debugPrint(
-          'Direct export write failed, using save dialog fallback: $e',
-        );
-
-        final fallbackPath = await FilePicker.platform.saveFile(
-          dialogTitle: 'Save Chat Export',
-          fileName: normalizedFileName,
-          type: FileType.custom,
-          allowedExtensions: ['txt'],
-          bytes: Uint8List.fromList(exportContent.codeUnits),
-        );
-
-        if (fallbackPath == null) {
-          if (mounted) {
-            _showTopSnackBar(
-              const SnackBar(
-                content: Text('Export cancelled'),
-                duration: Duration(seconds: 1),
-              ),
-            );
-          }
-          return;
-        }
-
-        final fallbackName = fallbackPath.split(Platform.pathSeparator).last;
-        if (fallbackName.isNotEmpty) {
-          savedFileName = fallbackName;
-        }
-      }
-
-      await _showLocalFileOperationNotification(
-        title: 'Chat Export Saved',
-        body: savedFileName,
+      final path = await FileSaver.saveFile(
+        filename: filename,
+        content: content,
       );
 
       if (mounted) {
-        _showTopSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Chat saved to: $savedFileName'),
-            duration: const Duration(seconds: 3),
+            content: Text(path == 'browser_download' 
+                ? 'Chat exported successfully (check downloads)'
+                : 'Chat exported and saved to downloads'),
             backgroundColor: Colors.green,
           ),
         );
       }
+
+      // Send system message
+      await MessageService.sendMessage(
+        recipientId: widget.otherUser.id,
+        content: '$currentUserName exported the chat',
+        messageType: 'system',
+      );
     } catch (e) {
-      debugPrint('Error exporting chat: $e');
       if (mounted) {
-        _showTopSnackBar(
-          SnackBar(
-            content: Text('Failed to export chat: $e'),
-            backgroundColor: Colors.red,
-          ),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to export chat: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -7812,6 +7708,7 @@ class _ChatScreenState extends State<ChatScreen>
       ],
     );
   }
+
 
   /// Show user profile bottom sheet (Skype-style)
   void _showUserProfile() {
@@ -11817,6 +11714,7 @@ class _ChatScreenState extends State<ChatScreen>
           onShowExcalidraw: _showExcalidrawModal,
           onCallAudio: () => _showCallSetupModal(CallType.audio),
           onCallVideo: () => _showCallSetupModal(CallType.video),
+          onExportChat: _exportChat,
         ),
         body: GestureDetector(
           // Tap outside the modal to dismiss it
