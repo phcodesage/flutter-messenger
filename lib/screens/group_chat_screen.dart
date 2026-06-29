@@ -256,7 +256,92 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
-  /// Load locally cached messages for this group and paint them immediately.
+  void _syncGroupColorFromMessages(List<GroupMessage> messages) {
+    final themeColorHex = widget.group.themeColor;
+    if (themeColorHex == null || themeColorHex.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _headerColor = const Color(0xFF4C1D95);
+          _showResetButton = false;
+        });
+      }
+      _clearGroupChatColor();
+      return;
+    }
+
+    GroupMessage? latestColorMsg;
+    // Scan messages list from the end (newest) to the beginning (oldest) since it is chronological
+    for (int i = messages.length - 1; i >= 0; i--) {
+      final msg = messages[i];
+      if (msg.messageType == 'system' &&
+          (msg.content.contains('Changed background color') ||
+           msg.content.contains('Reset background color') ||
+           msg.content.contains('changed the group chat color') ||
+           msg.content.contains('reset the group chat color'))) {
+        latestColorMsg = msg;
+        break;
+      }
+    }
+
+    if (latestColorMsg != null) {
+      final isResetMsg = latestColorMsg.content.contains('Reset') ||
+          latestColorMsg.content.contains('reset');
+      if (isResetMsg) {
+        // Unconditionally reset to default color
+        if (mounted) {
+          setState(() {
+            _headerColor = const Color(0xFF4C1D95);
+            _showResetButton = false;
+          });
+        }
+        _clearGroupChatColor();
+      } else {
+        // Color change message
+        final isFromSelf = latestColorMsg.senderId == _currentUserId;
+        if (isFromSelf) {
+          // We set it! Do not apply, keep/reset to default color
+          if (mounted) {
+            setState(() {
+              _headerColor = const Color(0xFF4C1D95);
+              _showResetButton = false;
+            });
+          }
+          _clearGroupChatColor();
+        } else {
+          // Someone else set it! Apply it
+          try {
+            final hexColor = themeColorHex.replaceAll('#', '');
+            final color = Color(int.parse('FF$hexColor', radix: 16));
+            if (mounted) {
+              setState(() {
+                _headerColor = color;
+                _showResetButton = true;
+              });
+            }
+            _saveGroupChatColor(themeColorHex);
+          } catch (e) {
+            debugPrint('Error parsing group theme color from history: $e');
+          }
+        }
+      }
+    } else {
+      // No system message found in the list, apply theme color by default
+      try {
+        final hexColor = themeColorHex.replaceAll('#', '');
+        final color = Color(int.parse('FF$hexColor', radix: 16));
+        if (mounted) {
+          setState(() {
+            _headerColor = color;
+            _showResetButton = true;
+          });
+        }
+        _saveGroupChatColor(themeColorHex);
+      } catch (e) {
+        debugPrint('Error parsing group theme color from history: $e');
+      }
+    }
+  }
+
   /// Mirrors the 1:1 chat's `_loadCachedMessages` so reopening a group feels
   /// instant even before the network refresh resolves.
   Future<void> _loadCachedGroupMessages() async {
@@ -267,6 +352,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         // Leave _isLoading = true so the shimmer is shown on true cold open.
         return;
       }
+      _syncGroupColorFromMessages(cached);
       setState(() {
         _messages = cached;
         _isLoading = false;
@@ -484,7 +570,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         '🎨 [GROUP COLOR CHANGED] Event group ID: ${data['group_id']}',
       );
       debugPrint('🎨 [GROUP COLOR CHANGED] Listener key: $key');
-      if (data['group_id'] == widget.group.id) {
+      final eventGroupId = data['group_id'] != null
+          ? int.tryParse(data['group_id'].toString())
+          : null;
+      if (eventGroupId == widget.group.id) {
         debugPrint('🎨 [GROUP COLOR CHANGED] Processing for current group');
         _handleGroupColorChange(data);
       } else {
@@ -499,7 +588,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       debugPrint('🔄 [GROUP COLOR RESET] Event group ID: ${data['group_id']}');
       debugPrint('🔄 [GROUP COLOR RESET] Event data type: ${data.runtimeType}');
       debugPrint('🔄 [GROUP COLOR RESET] Full event data: $data');
-      if (data['group_id'] == widget.group.id) {
+      final eventGroupId = data['group_id'] != null
+          ? int.tryParse(data['group_id'].toString())
+          : null;
+      if (eventGroupId == widget.group.id) {
         debugPrint('🔄 [GROUP COLOR RESET] Processing for current group');
         _handleGroupColorReset(data);
       } else {
@@ -713,6 +805,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       );
 
       if (mounted) {
+        _syncGroupColorFromMessages(messages);
         setState(() {
           _messages = messages; // Don't reverse - ListView will handle it
           _isLoading = false;
@@ -1105,10 +1198,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void _handleGroupColorChange(Map<String, dynamic> data) {
     final colorHex = data['color'] as String?;
     final senderName = data['sender_name'] as String?;
-    final senderId = data['sender_id'] as int?;
+    final senderId = data['sender_id'] != null
+        ? int.tryParse(data['sender_id'].toString())
+        : null;
     final isFromSelf = senderId == _currentUserId;
-    final timestampMs =
-        data['timestamp_ms'] as int? ?? DateTime.now().millisecondsSinceEpoch;
+    final timestampMs = data['timestamp_ms'] != null
+        ? int.tryParse(data['timestamp_ms'].toString()) ??
+            DateTime.now().millisecondsSinceEpoch
+        : DateTime.now().millisecondsSinceEpoch;
 
     if (colorHex != null) {
       try {
@@ -1151,9 +1248,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           reactions: {},
         );
 
-        setState(() {
-          _messages.add(colorMessage);
-        });
+        if (!isFromSelf) {
+          setState(() {
+            _messages.add(colorMessage);
+          });
+        }
 
         // Only auto-scroll if user is at bottom, otherwise just show unread badge
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1175,21 +1274,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   void _handleGroupColorReset(Map<String, dynamic> data) {
     final senderName = data['sender_name'] as String?;
-    final senderId = data['sender_id'] as int?;
+    final senderId = data['sender_id'] != null
+        ? int.tryParse(data['sender_id'].toString())
+        : null;
     final isFromSelf = senderId == _currentUserId;
-    final timestampMs =
-        data['timestamp_ms'] as int? ?? DateTime.now().millisecondsSinceEpoch;
+    final timestampMs = data['timestamp_ms'] != null
+        ? int.tryParse(data['timestamp_ms'].toString()) ??
+            DateTime.now().millisecondsSinceEpoch
+        : DateTime.now().millisecondsSinceEpoch;
 
-    // Only apply color reset if we are NOT the sender (matches 1-on-1 behavior)
-    if (!isFromSelf) {
-      setState(() {
-        _headerColor = const Color(0xFF4C1D95); // Reset to default
-        _showResetButton = false;
-      });
+    // Always apply color reset (incoming or cross-device sync)
+    setState(() {
+      _headerColor = const Color(0xFF4C1D95); // Reset to default
+      _showResetButton = false;
+    });
 
-      // Clear saved color
-      _clearGroupChatColor();
-    }
+    // Clear saved color
+    _clearGroupChatColor();
 
     // Create system message
     final resetMessage = GroupMessage(
@@ -1215,9 +1316,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       reactions: {},
     );
 
-    setState(() {
-      _messages.add(resetMessage);
-    });
+    if (!isFromSelf) {
+      setState(() {
+        _messages.add(resetMessage);
+      });
+    }
 
     // Scroll to bottom to show the message
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -4646,6 +4749,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Reset group chat color for all members
   void _resetGroupColor() {
+    _resetGroupColorLocally();
+
     // Emit group color reset event
     debugPrint(
       '🔄 [MOBILE] Emitting group_color_reset for group ${widget.group.id}',
@@ -7816,7 +7921,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Reset group chat color for all members
   void _resetColor() {
-    _resetGroupColorLocally(); // Use local reset instead of group reset
+    _resetGroupColor();
   }
 
   /// Export chat history to a .txt file in Downloads

@@ -136,6 +136,7 @@ class Group {
   final String myRole; // 'admin' or 'member'
   final bool isMuted;
   final GroupMessage? lastMessage;
+  final String? themeColor;
 
   Group({
     required this.id,
@@ -149,6 +150,7 @@ class Group {
     required this.myRole,
     this.isMuted = false,
     this.lastMessage,
+    this.themeColor,
   });
 
   factory Group.fromJson(Map<String, dynamic> json) {
@@ -180,6 +182,7 @@ class Group {
                 json['last_message'] as Map<String, dynamic>,
               )
             : null,
+        themeColor: json['theme_color'] as String?,
       );
     } catch (e, stackTrace) {
       debugPrint('❌ Error parsing Group: $e');
@@ -202,6 +205,7 @@ class Group {
       'my_role': myRole,
       'is_muted': isMuted,
       'last_message': lastMessage?.toJson(),
+      'theme_color': themeColor,
     };
   }
 

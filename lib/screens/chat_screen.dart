@@ -1790,8 +1790,12 @@ class _ChatScreenState extends State<ChatScreen>
     _socketService.addListener('colorChanged', key, (
       Map<String, dynamic> data,
     ) {
-      final senderId = data['sender_id'] as int?;
-      final recipientId = data['recipient_id'] as int?;
+      final senderId = data['sender_id'] != null
+          ? int.tryParse(data['sender_id'].toString())
+          : null;
+      final recipientId = data['recipient_id'] != null
+          ? int.tryParse(data['recipient_id'].toString())
+          : null;
       if (senderId == widget.otherUser.id) {
         _handleColorChange(data);
       } else if (senderId == _currentUserId &&
@@ -1802,8 +1806,12 @@ class _ChatScreenState extends State<ChatScreen>
 
     // Listen for color reset events (from other user OR from self on another device)
     _socketService.addListener('colorReset', key, (Map<String, dynamic> data) {
-      final senderId = data['sender_id'] as int?;
-      final recipientId = data['recipient_id'] as int?;
+      final senderId = data['sender_id'] != null
+          ? int.tryParse(data['sender_id'].toString())
+          : null;
+      final recipientId = data['recipient_id'] != null
+          ? int.tryParse(data['recipient_id'].toString())
+          : null;
       if (senderId == widget.otherUser.id) {
         _handleColorReset(data);
       } else if (senderId == _currentUserId &&
@@ -2774,10 +2782,14 @@ class _ChatScreenState extends State<ChatScreen>
     final senderName = _chatDisplayNameFromSender(
       rawSenderName ?? widget.otherUser.fullName,
     );
-    final senderId = data['sender_id'] as int?;
+    final senderId = data['sender_id'] != null
+        ? int.tryParse(data['sender_id'].toString())
+        : null;
     final isFromSelf = senderId == _currentUserId;
-    final timestampMs =
-        data['timestamp_ms'] as int? ?? DateTime.now().millisecondsSinceEpoch;
+    final timestampMs = data['timestamp_ms'] != null
+        ? int.tryParse(data['timestamp_ms'].toString()) ??
+            DateTime.now().millisecondsSinceEpoch
+        : DateTime.now().millisecondsSinceEpoch;
 
     if (colorHex != null) {
       try {
@@ -2801,16 +2813,14 @@ class _ChatScreenState extends State<ChatScreen>
         final hexColor = colorHex.replaceAll('#', '');
         final color = Color(int.parse('FF$hexColor', radix: 16));
 
-        // Only apply color change if we are the RECIPIENT (not the sender)
-        if (!isFromSelf) {
-          setState(() {
-            _headerColor = color;
-            _showResetButton = true;
-          });
+        // Always apply color change (incoming or cross-device)
+        setState(() {
+          _headerColor = color;
+          _showResetButton = true;
+        });
 
-          // Persist the color so it survives app restarts / background
-          _saveChatColor(colorHex);
-        }
+        // Persist the color so it survives app restarts / background
+        _saveChatColor(colorHex);
 
         // Create system message
         final colorMessage = Message(
@@ -2830,9 +2840,11 @@ class _ChatScreenState extends State<ChatScreen>
           isDeleted: false,
         );
 
-        setState(() {
-          _messages.insert(0, colorMessage);
-        });
+        if (!isFromSelf) {
+          setState(() {
+            _messages.insert(0, colorMessage);
+          });
+        }
 
         // Only auto-scroll if user is at bottom, otherwise just show unread badge
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2855,10 +2867,14 @@ class _ChatScreenState extends State<ChatScreen>
     final senderName = _chatDisplayNameFromSender(
       rawSenderName ?? widget.otherUser.fullName,
     );
-    final senderId = data['sender_id'] as int?;
+    final senderId = data['sender_id'] != null
+        ? int.tryParse(data['sender_id'].toString())
+        : null;
     final isFromSelf = senderId == _currentUserId;
-    final timestampMs =
-        data['timestamp_ms'] as int? ?? DateTime.now().millisecondsSinceEpoch;
+    final timestampMs = data['timestamp_ms'] != null
+        ? int.tryParse(data['timestamp_ms'].toString()) ??
+            DateTime.now().millisecondsSinceEpoch
+        : DateTime.now().millisecondsSinceEpoch;
 
     // Dedup check
     final alreadyExists = _messages.any(
@@ -3057,7 +3073,7 @@ class _ChatScreenState extends State<ChatScreen>
         _currentUserId!,
         widget.otherUser.id,
       );
-      debugPrint('ðŸ—‘ï¸ Conversation cache cleared for room: $currentRoomId');
+      debugPrint('🗑️ Conversation cache cleared for room: $currentRoomId');
     }
 
     // Show a snackbar notification
@@ -3071,13 +3087,44 @@ class _ChatScreenState extends State<ChatScreen>
       );
     }
 
-    debugPrint('âœ… Messages cleared for room: $currentRoomId');
+    debugPrint('✅ Messages cleared for room: $currentRoomId');
+  }
+
+  void _syncColorFromMessages(List<Message> messages) {
+    for (final msg in messages) {
+      if (msg.messageType == 'color_change') {
+        final colorHex = msg.content;
+        try {
+          final hexColor = colorHex.replaceAll('#', '');
+          final color = Color(int.parse('FF$hexColor', radix: 16));
+          if (mounted) {
+            setState(() {
+              _headerColor = color;
+              _showResetButton = true;
+            });
+          }
+          _saveChatColor(colorHex);
+        } catch (e) {
+          debugPrint('Error parsing color from history: $e');
+        }
+        return; // found the latest, stop scanning
+      } else if (msg.messageType == 'color_reset') {
+        if (mounted) {
+          setState(() {
+            _headerColor = const Color(0xFF121212);
+            _showResetButton = false;
+          });
+        }
+        _saveChatColor('#121212');
+        return; // found the latest, stop scanning
+      }
+    }
   }
 
   Future<void> _loadCachedMessages() async {
     final currentUserId = _currentUserId ?? await StorageService.getUserId();
     if (currentUserId == null) {
-      debugPrint('âš ï¸ No user ID available for cache loading');
+      debugPrint('⚠️ No user ID available for cache loading');
       return;
     }
 
@@ -3088,7 +3135,8 @@ class _ChatScreenState extends State<ChatScreen>
       );
 
       if (cached.isNotEmpty && mounted) {
-        debugPrint('ðŸ“¦ Loaded ${cached.length} messages from cache');
+        debugPrint('📦 Loaded ${cached.length} messages from cache');
+        _syncColorFromMessages(cached);
         setState(() {
           _messages = cached.reversed.toList();
           _databaseLoadedMessageIds
@@ -3102,7 +3150,7 @@ class _ChatScreenState extends State<ChatScreen>
         });
       } else {
         debugPrint(
-          'ðŸ“¦ No cached messages available - this is expected on first open',
+          '📦 No cached messages available - this is expected on first open',
         );
         // Don't show empty state - let _loadMessages handle it
       }
@@ -3140,26 +3188,28 @@ class _ChatScreenState extends State<ChatScreen>
     // Guard against concurrent calls
     if (_isLoadingMessages) {
       debugPrint(
-        'âš ï¸ _loadMessages already in progress, skipping duplicate call',
+        '⚠️ _loadMessages already in progress, skipping duplicate call',
       );
       return;
     }
 
     _isLoadingMessages = true;
     try {
-      debugPrint('ðŸ”„ Loading messages for user ${widget.otherUser.id}...');
+      debugPrint('🔄 Loading messages for user ${widget.otherUser.id}...');
       final messages = await MessageService.getConversationMessages(
         userId: widget.otherUser.id,
         limit: 50,
         offlineFirst: false, // Cache was already shown by _loadCachedMessages
       );
-      debugPrint('âœ… Successfully loaded ${messages.length} messages');
+      debugPrint('✅ Successfully loaded ${messages.length} messages');
 
       if (!mounted) {
-        debugPrint('âš ï¸ Widget unmounted before setState, skipping update');
+        debugPrint('⚠️ Widget unmounted before setState, skipping update');
         _isLoadingMessages = false;
         return;
       }
+
+      _syncColorFromMessages(messages);
 
       setState(() {
         _messages = messages.reversed
