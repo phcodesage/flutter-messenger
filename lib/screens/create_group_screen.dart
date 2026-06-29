@@ -219,6 +219,23 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     });
   }
 
+  static const List<Color> _avatarColors = [
+    Color(0xFF1F77B4), // Blue
+    Color(0xFFFF7F0E), // Orange
+    Color(0xFF2CA02C), // Green
+    Color(0xFFD62728), // Red
+    Color(0xFF9467BD), // Purple
+    Color(0xFF8C564B), // Brown
+    Color(0xFFE377C2), // Pink
+    Color(0xFF7F7F7F), // Gray
+    Color(0xFFBCBD22), // Olive
+    Color(0xFF17BECF), // Cyan
+  ];
+
+  Color _getAvatarColor(int index) {
+    return _avatarColors[index % _avatarColors.length];
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -390,7 +407,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                           child: Stack(
                             children: [
                               CircleAvatar(
-                                backgroundColor: const Color(0xFF8B5CF6),
+                                backgroundColor: _getAvatarColor(user.avatarColorIndex),
                                 radius: 20,
                                 child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
                                     ? ClipOval(
@@ -399,7 +416,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                           width: 40,
                                           height: 40,
                                           fit: BoxFit.cover,
-                                          placeholderColor: const Color(0xFF8B5CF6),
+                                          placeholderColor: _getAvatarColor(user.avatarColorIndex),
                                           errorWidget: Text(
                                             user.initials,
                                             style: const TextStyle(

@@ -7110,7 +7110,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     child: Stack(
                                       children: [
                                         CircleAvatar(
-                                          backgroundColor: _accent(),
+                                          backgroundColor: _getAvatarColor(u.avatarColorIndex),
                                           radius: 20,
                                           child: u.avatarUrl != null && u.avatarUrl!.isNotEmpty
                                               ? ClipOval(
@@ -7119,7 +7119,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                     width: 40,
                                                     height: 40,
                                                     fit: BoxFit.cover,
-                                                    placeholderColor: _accent(),
+                                                    placeholderColor: _getAvatarColor(u.avatarColorIndex),
                                                     errorWidget: Text(
                                                       u.initials,
                                                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
@@ -7226,6 +7226,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     } catch (e) {
       return 'offline';
     }
+  }
+
+  static const List<Color> _avatarColors = [
+    Color(0xFF1F77B4), // Blue
+    Color(0xFFFF7F0E), // Orange
+    Color(0xFF2CA02C), // Green
+    Color(0xFFD62728), // Red
+    Color(0xFF9467BD), // Purple
+    Color(0xFF8C564B), // Brown
+    Color(0xFFE377C2), // Pink
+    Color(0xFF7F7F7F), // Gray
+    Color(0xFFBCBD22), // Olive
+    Color(0xFF17BECF), // Cyan
+  ];
+
+  Color _getAvatarColor(int index) {
+    return _avatarColors[index % _avatarColors.length];
   }
 
   /// Group settings sheet: edit info (admin), add members (admin), leave group.
