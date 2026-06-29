@@ -194,9 +194,10 @@ class Group {
         createdAt: json['created_at'] as String,
         myRole: myRole,
         isMuted: json['is_muted'] as bool? ?? false,
+
         lastMessage: json['last_message'] != null
             ? GroupMessage.fromJson(
-                json['last_message'] as Map<String, dynamic>,
+                Map<String, dynamic>.from(json['last_message'] as Map),
               )
             : null,
         themeColor: json['theme_color'] as String?,
