@@ -377,6 +377,7 @@ class GroupMessage {
   final bool isExcalidrawLink;
   final String? excalidrawPinnedAt;
   final String? excalidrawTitle;
+  final bool isEdited;
 
   GroupMessage({
     required this.id,
@@ -406,6 +407,7 @@ class GroupMessage {
     this.isExcalidrawLink = false,
     this.excalidrawPinnedAt,
     this.excalidrawTitle,
+    this.isEdited = false,
   });
 
   /// Returns a copy with the given fields replaced. Only non-null arguments
@@ -439,6 +441,7 @@ class GroupMessage {
     String? excalidrawPinnedAt,
     String? excalidrawTitle,
     bool clearExcalidrawPinnedAt = false,
+    bool? isEdited,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -471,6 +474,7 @@ class GroupMessage {
           ? null
           : (excalidrawPinnedAt ?? this.excalidrawPinnedAt),
       excalidrawTitle: excalidrawTitle ?? this.excalidrawTitle,
+      isEdited: isEdited ?? this.isEdited,
     );
   }
 
@@ -508,6 +512,7 @@ class GroupMessage {
       excalidrawPinnedAt: excalidrawPinnedAt,
       isPinned: excalidrawPinnedAt != null,
       pinnedAt: excalidrawPinnedAt,
+      isEdited: isEdited,
     );
   }
 
@@ -632,6 +637,7 @@ class GroupMessage {
         isExcalidrawLink: json['is_excalidraw_link'] as bool? ?? false,
         excalidrawPinnedAt: json['excalidraw_pinned_at'] as String?,
         excalidrawTitle: json['excalidraw_title'] as String?,
+        isEdited: json['is_edited'] as bool? ?? json['isEdited'] as bool? ?? false,
       );
     } catch (e, stackTrace) {
       debugPrint('❌ Error parsing GroupMessage: $e');

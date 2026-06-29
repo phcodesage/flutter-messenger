@@ -1054,7 +1054,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Text(
-              message.formattedTime,
+              '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
               style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
             ),
             SizedBox(width: 4 * scale),
@@ -1073,7 +1073,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         mainAxisSize: MainAxisSize.max,
         children: [
           Text(
-            message.formattedTime,
+            '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
             style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
           ),
           SizedBox(width: 4 * scale),
@@ -1100,7 +1100,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              message.formattedTime,
+              '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
               style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
             ),
           ],
@@ -1117,7 +1117,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         mainAxisSize: MainAxisSize.max,
         children: [
           Text(
-            message.formattedTime,
+            '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
             style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
           ),
           const Spacer(),

@@ -320,6 +320,10 @@ class _ChatScreenState extends State<ChatScreen>
   // Edit state
   Message? _editingMessage;
 
+  // Top SnackBar Overlay state
+  OverlayEntry? _topSnackBarEntry;
+  Timer? _topSnackBarTimer;
+
   // Reaction state: { messageId: { emoji: Set<userId> } }
   final Map<int, Map<String, Set<String>>> _messageReactions = {};
 
@@ -1334,47 +1338,92 @@ class _ChatScreenState extends State<ChatScreen>
   void _showTopSnackBar(SnackBar snackBar) {
     if (!mounted) return;
 
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.hideCurrentMaterialBanner();
+    _topSnackBarTimer?.cancel();
+    _topSnackBarEntry?.remove();
+    _topSnackBarEntry = null;
 
-    final actions = <Widget>[];
-    if (snackBar.action != null) {
-      actions.add(
-        TextButton(
-          onPressed: () {
-            messenger.hideCurrentMaterialBanner();
-            snackBar.action!.onPressed();
-          },
-          child: Text(
-            snackBar.action!.label,
-            style: TextStyle(color: snackBar.action!.textColor ?? Colors.white),
+    final overlay = Overlay.of(context, rootOverlay: true);
+
+    _topSnackBarEntry = OverlayEntry(
+      builder: (overlayContext) {
+        final topInset = MediaQuery.of(overlayContext).padding.top;
+
+        return Positioned(
+          top: topInset + 8,
+          left: 14,
+          right: 14,
+          child: Material(
+            color: Colors.transparent,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, child) {
+                return Opacity(
+                  opacity: value,
+                  child: Transform.translate(
+                    offset: Offset(0, -16 * (1 - value)),
+                    child: child,
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: snackBar.backgroundColor ?? const Color(0xFF323232),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black45,
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: DefaultTextStyle(
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        child: snackBar.content,
+                      ),
+                    ),
+                    if (snackBar.action != null)
+                      TextButton(
+                        onPressed: () {
+                          _topSnackBarEntry?.remove();
+                          _topSnackBarEntry = null;
+                          snackBar.action!.onPressed();
+                        },
+                        child: Text(
+                          snackBar.action!.label,
+                          style: TextStyle(
+                            color: snackBar.action!.textColor ?? Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
-      );
-    }
-
-    actions.add(
-      TextButton(
-        onPressed: messenger.hideCurrentMaterialBanner,
-        child: const Text('DISMISS', style: TextStyle(color: Colors.white)),
-      ),
+        );
+      },
     );
 
-    messenger.showMaterialBanner(
-      MaterialBanner(
-        content: snackBar.content,
-        backgroundColor: snackBar.backgroundColor ?? const Color(0xFF323232),
-        contentTextStyle: const TextStyle(color: Colors.white),
-        actions: actions,
-      ),
-    );
+    overlay.insert(_topSnackBarEntry!);
 
     final autoHide = snackBar.duration;
     if (autoHide > Duration.zero) {
-      Timer(autoHide, () {
+      _topSnackBarTimer = Timer(autoHide, () {
         if (mounted) {
-          messenger.hideCurrentMaterialBanner();
+          _topSnackBarEntry?.remove();
+          _topSnackBarEntry = null;
         }
       });
     }
@@ -3588,6 +3637,44 @@ class _ChatScreenState extends State<ChatScreen>
     });
 
     try {
+      if (!_scrollController.hasClients) return;
+
+      // Check if the message is already built and fully visible in the viewport.
+      if (_messageItemKeys[task.id]?.currentContext != null) {
+        final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
+        final RenderObject? ro = ctx.findRenderObject();
+        if (ro != null && ro.attached) {
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          if (viewport != null) {
+            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
+            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
+            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double currentOffset = _scrollController.offset;
+
+            // Use a small safety margin of 5 pixels. If the item is larger than the viewport, 
+            // minOffset will be less than or equal to maxOffset, but if the margin makes the 
+            // range invalid, we fall back to a 0 margin.
+            final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
+            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+              // Already fully visible! Just return and flash.
+              return;
+            }
+
+            // If built but not fully visible, jump directly to the exact centered position.
+            final double revealOffset = viewport
+                .getOffsetToReveal(ro, 0.5)
+                .offset
+                .clamp(
+                  _scrollController.position.minScrollExtent,
+                  _scrollController.position.maxScrollExtent,
+                );
+            _scrollController.jumpTo(revealOffset);
+            return;
+          }
+        }
+      }
+
       // ── 1. Paginate until the message is in _messages ─────────────────────
       final bool alreadyLoaded = _messages.any((m) => m.id == task.id);
       while (!_messages.any((m) => m.id == task.id) &&
@@ -3598,12 +3685,19 @@ class _ChatScreenState extends State<ChatScreen>
       }
 
       final int index = _messages.indexWhere((m) => m.id == task.id);
-      if (index == -1 || !mounted || !_scrollController.hasClients) return;
+      if (index == -1 || !mounted) return;
 
       // Wait for layout to settle after any new messages were inserted.
       await WidgetsBinding.instance.endOfFrame;
 
       final ScrollPosition pos = _scrollController.position;
+
+      // Calculate fracOffset and jumpTarget in outer scope so they can be accessed in fallback sweep.
+      final double fracOffset = _messages.length > 1
+          ? (index / (_messages.length - 1)) * pos.maxScrollExtent
+          : 0.0;
+      final double jumpTarget = (fracOffset - pos.viewportDimension / 2 + 40)
+          .clamp(0.0, pos.maxScrollExtent);
 
       // ── 2. Initial jump to bring the item into the render tree ────────────
       //
@@ -3617,25 +3711,75 @@ class _ChatScreenState extends State<ChatScreen>
       if (!alreadyLoaded) {
         _scrollController.jumpTo(pos.maxScrollExtent);
       } else {
-        final double fracOffset = _messages.length > 1
-            ? (index / (_messages.length - 1)) * pos.maxScrollExtent
-            : 0.0;
-        final double jumpTarget = (fracOffset - pos.viewportDimension / 2 + 40)
-            .clamp(0.0, pos.maxScrollExtent);
         _scrollController.jumpTo(jumpTarget);
       }
       await WidgetsBinding.instance.endOfFrame;
+
+      if (!mounted) return;
+
+      // Check if it's built and visible now after the initial jump
+      if (_messageItemKeys[task.id]?.currentContext != null) {
+        final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
+        final RenderObject? ro = ctx.findRenderObject();
+        if (ro != null && ro.attached) {
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          if (viewport != null) {
+            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
+            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
+            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double currentOffset = _scrollController.offset;
+
+            // If already fully visible after the initial jump, we don't need a second adjustment jump!
+            final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
+            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+              return;
+            }
+
+            // Otherwise, do the final exact jump
+            final double revealOffset = viewport
+                .getOffsetToReveal(ro, 0.5)
+                .offset
+                .clamp(
+                  _scrollController.position.minScrollExtent,
+                  _scrollController.position.maxScrollExtent,
+                );
+            _scrollController.jumpTo(revealOffset);
+            return;
+          }
+        }
+      }
 
       // ── 3. If item still not built, sweep the scroll range until it is ────
       // Each step is cacheExtent-sized (500 px) so we cover the whole content.
       if (_messageItemKeys[task.id]?.currentContext == null) {
         final double step = 400;
-        double sweep = 0;
-        while (sweep <= pos.maxScrollExtent && mounted) {
-          _scrollController.jumpTo(sweep.clamp(0.0, pos.maxScrollExtent));
+        final double maxScroll = pos.maxScrollExtent;
+        final double baseOffset = !alreadyLoaded ? pos.maxScrollExtent : (fracOffset - pos.viewportDimension / 2 + 40).clamp(0.0, pos.maxScrollExtent);
+        
+        final List<double> sweepOffsets = [baseOffset];
+        for (int i = 1; i <= 5; i++) {
+          sweepOffsets.add(baseOffset + i * step);
+          sweepOffsets.add(baseOffset - i * step);
+        }
+        
+        for (final double sweep in sweepOffsets) {
+          if (!mounted) break;
+          final double clamped = sweep.clamp(0.0, maxScroll);
+          _scrollController.jumpTo(clamped);
           await WidgetsBinding.instance.endOfFrame;
           if (_messageItemKeys[task.id]?.currentContext != null) break;
-          sweep += step;
+        }
+        
+        // Fallback: full sweep from 0 if still not found (highly unlikely)
+        if (_messageItemKeys[task.id]?.currentContext == null && mounted) {
+          double sweep = 0;
+          while (sweep <= maxScroll && mounted) {
+            _scrollController.jumpTo(sweep.clamp(0.0, maxScroll));
+            await WidgetsBinding.instance.endOfFrame;
+            if (_messageItemKeys[task.id]?.currentContext != null) break;
+            sweep += step;
+          }
         }
       }
 
@@ -11609,6 +11753,9 @@ class _ChatScreenState extends State<ChatScreen>
     _typingUpdateThrottle?.cancel();
     _lastSeenRefreshTimer?.cancel();
     _callInProgressOnOtherDeviceTimer?.cancel();
+    _topSnackBarTimer?.cancel();
+    _topSnackBarEntry?.remove();
+    _topSnackBarEntry = null;
 
     // Send typing stop without setState (widget is being disposed)
     _socketService.stopTyping(widget.otherUser.id);

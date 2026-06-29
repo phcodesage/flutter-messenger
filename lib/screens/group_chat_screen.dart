@@ -86,8 +86,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   int _unreadCount = 0;
   bool _userHasScrolledManually = false;
 
-  // Reply state
+  // Reply & Edit state
   GroupMessage? _replyingToMessage;
+  GroupMessage? _editingMessage;
 
   // Reaction state
   final Map<int, Map<String, Set<String>>> _messageReactions = {};
@@ -104,6 +105,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // Timestamp visibility toggle
   bool _showTimestamps = false;
+
+  // Top SnackBar Overlay state
+  OverlayEntry? _topSnackBarEntry;
+  Timer? _topSnackBarTimer;
 
   // Auto-translate toggle
   bool _autoTranslate = false;
@@ -123,6 +128,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   String _taskFilter = 'pending';
   final Map<int, GlobalKey> _messageItemKeys = {};
   int? _bubbleFlashId;
+  bool _isLeaving = false;
 
   void _notifyTaskModalChanged() {
     _taskModalVersion.value = _taskModalVersion.value + 1;
@@ -386,47 +392,92 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void _showTopSnackBar(SnackBar snackBar) {
     if (!mounted) return;
 
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.hideCurrentMaterialBanner();
+    _topSnackBarTimer?.cancel();
+    _topSnackBarEntry?.remove();
+    _topSnackBarEntry = null;
 
-    final actions = <Widget>[];
-    if (snackBar.action != null) {
-      actions.add(
-        TextButton(
-          onPressed: () {
-            messenger.hideCurrentMaterialBanner();
-            snackBar.action!.onPressed();
-          },
-          child: Text(
-            snackBar.action!.label,
-            style: TextStyle(color: snackBar.action!.textColor ?? Colors.white),
+    final overlay = Overlay.of(context, rootOverlay: true);
+
+    _topSnackBarEntry = OverlayEntry(
+      builder: (overlayContext) {
+        final topInset = MediaQuery.of(overlayContext).padding.top;
+
+        return Positioned(
+          top: topInset + 8,
+          left: 14,
+          right: 14,
+          child: Material(
+            color: Colors.transparent,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, child) {
+                return Opacity(
+                  opacity: value,
+                  child: Transform.translate(
+                    offset: Offset(0, -16 * (1 - value)),
+                    child: child,
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: snackBar.backgroundColor ?? const Color(0xFF323232),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black45,
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: DefaultTextStyle(
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        child: snackBar.content,
+                      ),
+                    ),
+                    if (snackBar.action != null)
+                      TextButton(
+                        onPressed: () {
+                          _topSnackBarEntry?.remove();
+                          _topSnackBarEntry = null;
+                          snackBar.action!.onPressed();
+                        },
+                        child: Text(
+                          snackBar.action!.label,
+                          style: TextStyle(
+                            color: snackBar.action!.textColor ?? Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
-      );
-    }
-
-    actions.add(
-      TextButton(
-        onPressed: messenger.hideCurrentMaterialBanner,
-        child: const Text('DISMISS', style: TextStyle(color: Colors.white)),
-      ),
+        );
+      },
     );
 
-    messenger.showMaterialBanner(
-      MaterialBanner(
-        content: snackBar.content,
-        backgroundColor: snackBar.backgroundColor ?? const Color(0xFF323232),
-        contentTextStyle: const TextStyle(color: Colors.white),
-        actions: actions,
-      ),
-    );
+    overlay.insert(_topSnackBarEntry!);
 
     final autoHide = snackBar.duration;
     if (autoHide > Duration.zero) {
-      Timer(autoHide, () {
+      _topSnackBarTimer = Timer(autoHide, () {
         if (mounted) {
-          messenger.hideCurrentMaterialBanner();
+          _topSnackBarEntry?.remove();
+          _topSnackBarEntry = null;
         }
       });
     }
@@ -634,7 +685,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // Group disbanded/deleted (e.g. the creator left) → close the chat.
     _socketService.addListener('groupDeleted', key, (data) {
       if (_eventGroupId(data) != widget.group.id) return;
-      if (!mounted) return;
+      if (!mounted || _isLeaving) return;
 
       final currentUserId = _socketService.currentUserId;
       final deletedById = data['deleted_by_id'] as int?;
@@ -759,7 +810,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       // group_member_removed
       if (removedUserId == _currentUserId) {
         // The current user was removed by an admin — exit the chat.
-        if (mounted) {
+        if (mounted && !_isLeaving) {
           _showTopSnackBar(
             const SnackBar(content: Text('You were removed from this group')),
           );
@@ -1041,6 +1092,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _messages[index] = GroupMessage.fromJson({
             ..._messages[index].toJson(),
             'content': newContent,
+            'is_edited': true,
           });
         }
       });
@@ -1585,6 +1637,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   Future<void> _sendMessage() async {
+    // ── EDIT MODE ──────────────────────────────────────────────
+    if (_editingMessage != null) {
+      final editTarget = _editingMessage!;
+      final newContent = _messageController.text.trim();
+      if (newContent.isNotEmpty && newContent != editTarget.content) {
+        _editGroupMessage(editTarget, newContent);
+      }
+      _clearEdit();
+      return;
+    }
+
     final content = _messageController.text.trim();
     if (content.isEmpty) return;
 
@@ -2057,6 +2120,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _typingHideTimer?.cancel();
     _typingEmitTimer?.cancel();
     _typingAutoStopTimer?.cancel();
+    _topSnackBarTimer?.cancel();
+    _topSnackBarEntry?.remove();
+    _topSnackBarEntry = null;
     _taskModalVersion.dispose();
     for (final r in _linkRecognizers) {
       r.dispose();
@@ -2511,6 +2577,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     bool isSentByMe,
     Map<int, Map<String, Set<String>>> reactionsForUi,
   ) {
+    final canDoubleTapEdit =
+        isSentByMe && message.messageType == 'text' && !message.isDeleted;
+
     return ChatMessageBubble(
       message: message.toMessage(),
       isSentByMe: isSentByMe,
@@ -2525,6 +2594,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _toggleTaskActionForMessage(message, details.globalPosition);
         }
       },
+      onDoubleTap: canDoubleTapEdit ? () => _startInlineEdit(message) : null,
       onLongPress: () => _showGroupMessageContextMenu(message, isSentByMe),
       onShowReactionPicker: _showGroupReactionPicker,
       onOpenMediaViewer: (_) => _openMediaViewer(message),
@@ -5299,8 +5369,46 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
 
     try {
+      if (!_scrollController.hasClients) return;
+
+      // Check if the message is already built and fully visible in the viewport.
+      if (_messageItemKeys[task.id]?.currentContext != null) {
+        final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
+        final RenderObject? ro = ctx.findRenderObject();
+        if (ro != null && ro.attached) {
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          if (viewport != null) {
+            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
+            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
+            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double currentOffset = _scrollController.offset;
+
+            // Use a small safety margin of 5 pixels. If the item is larger than the viewport, 
+            // minOffset will be less than or equal to maxOffset, but if the margin makes the 
+            // range invalid, we fall back to a 0 margin.
+            final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
+            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+              // Already fully visible! Just return and flash.
+              return;
+            }
+
+            // If built but not fully visible, jump directly to the exact centered position.
+            final double revealOffset = viewport
+                .getOffsetToReveal(ro, 0.5)
+                .offset
+                .clamp(
+                  _scrollController.position.minScrollExtent,
+                  _scrollController.position.maxScrollExtent,
+                );
+            _scrollController.jumpTo(revealOffset);
+            return;
+          }
+        }
+      }
+
       final int index = _messages.indexWhere((m) => m.id == task.id);
-      if (index == -1 || !mounted || !_scrollController.hasClients) return;
+      if (index == -1 || !mounted) return;
 
       await WidgetsBinding.instance.endOfFrame;
       final ScrollPosition pos = _scrollController.position;
@@ -5313,14 +5421,69 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       _scrollController.jumpTo(jumpTarget);
       await WidgetsBinding.instance.endOfFrame;
 
+      if (!mounted) return;
+
+      // Check if it's built and visible now after the initial jump
+      if (_messageItemKeys[task.id]?.currentContext != null) {
+        final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
+        final RenderObject? ro = ctx.findRenderObject();
+        if (ro != null && ro.attached) {
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          if (viewport != null) {
+            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
+            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
+            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double currentOffset = _scrollController.offset;
+
+            // If already fully visible after the initial jump, we don't need a second adjustment jump!
+            final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
+            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+              return;
+            }
+
+            // Otherwise, do the final exact jump
+            final double revealOffset = viewport
+                .getOffsetToReveal(ro, 0.5)
+                .offset
+                .clamp(
+                  _scrollController.position.minScrollExtent,
+                  _scrollController.position.maxScrollExtent,
+                );
+            _scrollController.jumpTo(revealOffset);
+            return;
+          }
+        }
+      }
+
       if (_messageItemKeys[task.id]?.currentContext == null) {
+        // Sweep outward from the estimated jumpTarget first (since it's usually very close)
         final double step = 400;
-        double sweep = 0;
-        while (sweep <= pos.maxScrollExtent && mounted) {
-          _scrollController.jumpTo(sweep.clamp(0.0, pos.maxScrollExtent));
+        final double maxScroll = pos.maxScrollExtent;
+        
+        final List<double> sweepOffsets = [jumpTarget];
+        for (int i = 1; i <= 5; i++) {
+          sweepOffsets.add(jumpTarget + i * step);
+          sweepOffsets.add(jumpTarget - i * step);
+        }
+        
+        for (final double sweep in sweepOffsets) {
+          if (!mounted) break;
+          final double clamped = sweep.clamp(0.0, maxScroll);
+          _scrollController.jumpTo(clamped);
           await WidgetsBinding.instance.endOfFrame;
           if (_messageItemKeys[task.id]?.currentContext != null) break;
-          sweep += step;
+        }
+        
+        // Fallback: full sweep from 0 if still not found (highly unlikely)
+        if (_messageItemKeys[task.id]?.currentContext == null && mounted) {
+          double sweep = 0;
+          while (sweep <= maxScroll && mounted) {
+            _scrollController.jumpTo(sweep.clamp(0.0, maxScroll));
+            await WidgetsBinding.instance.endOfFrame;
+            if (_messageItemKeys[task.id]?.currentContext != null) break;
+            sweep += step;
+          }
         }
       }
 
@@ -6814,6 +6977,19 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     _translateGroupMessage(message);
                   },
                 ),
+              // Edit option (for own text messages)
+              if (isSentByMe && message.messageType == 'text' && !message.isDeleted)
+                ListTile(
+                  leading: const Icon(Icons.edit, color: Color(0xFF7C3AED)),
+                  title: const Text(
+                    'Edit',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _startInlineEdit(message);
+                  },
+                ),
               // Delete option (for own messages)
               if (isSentByMe && !message.isDeleted)
                 ListTile(
@@ -6830,6 +7006,160 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Start inline edit mode for a group message
+  void _startInlineEdit(GroupMessage message) {
+    if (_messageController.text.trim().isNotEmpty) {
+      _confirmDiscardDraftThenEdit(message);
+      return;
+    }
+    setState(() {
+      _editingMessage = message;
+      _replyingToMessage = null;
+    });
+    _messageController.text = message.content;
+    _messageController.selection = TextSelection.collapsed(
+      offset: message.content.length,
+    );
+    _inputFocusNode.requestFocus();
+  }
+
+  /// Show confirmation dialog before discarding a draft to start an edit
+  void _confirmDiscardDraftThenEdit(GroupMessage message) {
+    showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        title: const Text(
+          'Discard draft?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'You have unsent text. Discard it and edit this message instead?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'Keep draft',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF420796),
+            ),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    ).then((confirmed) {
+      if (confirmed == true && mounted) {
+        _messageController.clear();
+        _startInlineEdit(message);
+      }
+    });
+  }
+
+  /// Clear edit state
+  void _clearEdit() {
+    setState(() {
+      _editingMessage = null;
+    });
+    _messageController.clear();
+  }
+
+  /// Send edited group message via socket and API fallback
+  void _editGroupMessage(GroupMessage message, String newContent) {
+    _socketService.editGroupMessage(message.id, widget.group.id, newContent);
+    GroupService.editMessage(
+      groupId: widget.group.id,
+      messageId: message.id,
+      content: newContent,
+    ).catchError((e) {
+      debugPrint('HTTP edit error: $e');
+    });
+
+    if (mounted) {
+      setState(() {
+        final index = _messages.indexWhere((m) => m.id == message.id);
+        if (index != -1) {
+          _messages[index] = GroupMessage.fromJson({
+            ..._messages[index].toJson(),
+            'content': newContent,
+            'is_edited': true,
+          });
+        }
+      });
+    }
+
+    _showTopSnackBar(
+      const SnackBar(
+        content: Text('Message edited'),
+        duration: Duration(seconds: 2),
+        backgroundColor: Color(0xFF4CAF50),
+      ),
+    );
+  }
+
+  /// Build edit preview widget (shown above input when editing a group message)
+  Widget _buildEditPreview() {
+    if (_editingMessage == null) return const SizedBox.shrink();
+
+    final message = _editingMessage!;
+    final content = message.content.length > 50
+        ? '${message.content.substring(0, 50)}...'
+        : message.content;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2D2D44),
+        borderRadius: BorderRadius.circular(8),
+        border: const Border(
+          left: BorderSide(color: Color(0xFF7C3AED), width: 4),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.edit_rounded, color: Color(0xFF7C3AED), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Editing message',
+                  style: TextStyle(
+                    color: Color(0xFF7C3AED),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  content,
+                  style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: _clearEdit,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              child: const Icon(Icons.close, color: Colors.grey, size: 18),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -7878,6 +8208,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (confirmed != true) return;
 
     try {
+      _isLeaving = true;
       // The backend disbands the group when the creator calls leave.
       await GroupService.leaveGroup(widget.group.id);
       if (mounted) {
@@ -7890,6 +8221,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         Navigator.pop(context);
       }
     } catch (e) {
+      _isLeaving = false;
       if (mounted) {
         _showTopSnackBar(
           SnackBar(
@@ -8598,7 +8930,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           backgroundColor: const Color(0xFF161625),
           composerInset: 0,
           showEmojiPicker: _showEmojiPicker,
-          isEditing: false,
+          isEditing: _editingMessage != null,
           onShowEmojiPickerModal: () => _showEmojiPickerModal(context),
           onClipboardPasteShortcut: _pasteFromClipboard,
           onInputContextMenuOpened: () {},
@@ -8619,7 +8951,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 padding: padding,
               ),
           isComposerMultiline: _isComposerMultiline,
-          editPreview: const SizedBox.shrink(),
+          editPreview: _buildEditPreview(),
           replyPreview: _replyingToMessage != null
               ? _buildReplyPreview()
               : const SizedBox.shrink(),

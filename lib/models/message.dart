@@ -34,6 +34,7 @@ class Message {
   final int? pinnedByUserId;
   final String? caption;
   final double? duration;
+  final bool isEdited;
 
   /// Local file path for optimistic media messages (before upload completes).
   /// Used to display the image/video from disk while the upload is in progress.
@@ -74,6 +75,7 @@ class Message {
     this.caption,
     this.duration,
     this.localFilePath,
+    this.isEdited = false,
   });
 
   /// Returns a copy of this message with the given fields replaced.
@@ -112,6 +114,7 @@ class Message {
     int? pinnedByUserId,
     String? caption,
     String? localFilePath,
+    bool? isEdited,
   }) {
     return Message(
       id: id ?? this.id,
@@ -146,6 +149,7 @@ class Message {
       pinnedByUserId: pinnedByUserId ?? this.pinnedByUserId,
       caption: caption ?? this.caption,
       localFilePath: localFilePath ?? this.localFilePath,
+      isEdited: isEdited ?? this.isEdited,
     );
   }
 
@@ -308,6 +312,7 @@ class Message {
       pinnedByUserId: json['pinned_by_user_id'] as int?,
       caption: caption,
       duration: (json['duration'] as num?)?.toDouble(),
+      isEdited: json['is_edited'] as bool? ?? json['isEdited'] as bool? ?? false,
     );
   }
 
@@ -516,6 +521,7 @@ class Message {
       'pinned_at': pinnedAt,
       'pinned_by_user_id': pinnedByUserId,
       'caption': caption,
+      'is_edited': isEdited,
     };
   }
 
