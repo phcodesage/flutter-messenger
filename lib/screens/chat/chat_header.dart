@@ -88,35 +88,39 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double screenWidth = MediaQuery.of(context).size.width;
+    // Under 390 logical pixels wide is considered compact (high DPI / small screens)
+    final bool isCompact = screenWidth < 390;
+    // We adjust scale slightly on compact screens to make titles/icons fit better
+    final double s = isCompact ? scale * 0.88 : scale;
+
     return AppBar(
       backgroundColor: headerColor,
-      toolbarHeight: _compactToolbarHeight * scale,
+      toolbarHeight: _compactToolbarHeight * s,
       elevation: 0,
       automaticallyImplyLeading: false,
-      // In the desktop two-pane layout the chat lives beside the conversation
-      // list, so there is nothing to pop back to — hide the back button.
       leading: onBack == null
           ? null
           : IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              icon: Icon(Icons.arrow_back, color: Colors.white, size: 24 * s),
               onPressed: onBack,
             ),
       titleSpacing: onBack == null ? 12 : 0,
-      title: _isGroup ? _buildGroupTitle() : _buildUserTitle(),
-      actions: _isGroup ? _buildGroupActions(context) : _buildUserActions(context),
+      title: _isGroup ? _buildGroupTitle(s) : _buildUserTitle(s),
+      actions: _isGroup ? _buildGroupActions(context, isCompact, s) : _buildUserActions(context, isCompact, s),
     );
   }
 
   // === 1:1 title / actions ===
 
-  Widget _buildUserTitle() {
+  Widget _buildUserTitle(double s) {
     return GestureDetector(
       onTap: onUserProfile,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildAvatarWithStatus(),
-          SizedBox(width: 10 * scale),
+          _buildAvatarWithStatus(s),
+          SizedBox(width: 10 * s),
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -128,12 +132,12 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                       : otherUser!.fullName.split(' ').first,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 15 * scale,
+                    fontSize: 15 * s,
                     fontWeight: FontWeight.w600,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (!isSelfChat) _buildHeaderStatusPill(scale),
+                if (!isSelfChat) _buildHeaderStatusPill(s),
               ],
             ),
           ),
@@ -142,17 +146,19 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  List<Widget> _buildUserActions(BuildContext context) {
-    return [
-      if (!isSelfChat && callInProgressOnOtherDevice)
+  List<Widget> _buildUserActions(BuildContext context, bool isCompact, double s) {
+    final List<Widget> actions = [];
+
+    if (!isSelfChat && callInProgressOnOtherDevice) {
+      actions.add(
         Padding(
-          padding: EdgeInsets.only(right: 6 * scale),
+          padding: EdgeInsets.only(right: 6 * s),
           child: Center(
             child: Container(
-              constraints: BoxConstraints(maxWidth: 180 * scale),
+              constraints: BoxConstraints(maxWidth: 140 * s),
               padding: EdgeInsets.symmetric(
-                horizontal: 10 * scale,
-                vertical: 6 * scale,
+                horizontal: 8 * s,
+                vertical: 4 * s,
               ),
               decoration: BoxDecoration(
                 color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
@@ -162,65 +168,107 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                 ),
               ),
               child: Text(
-                'Call in progress on other device',
-                maxLines: 2,
-                softWrap: true,
-                overflow: TextOverflow.fade,
-                textAlign: TextAlign.center,
+                'Call on other device',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: const Color(0xFFF59E0B),
-                  fontSize: 11 * scale,
+                  fontSize: 10 * s,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
           ),
-        )
-      else ...[
-        if (!isSelfChat)
-          IconButton(
-            icon: Icon(Icons.videocam, color: Colors.white, size: 24 * scale),
-            onPressed: onCallVideo,
-            tooltip: 'Video Call',
-          ),
-        if (!isSelfChat)
-          IconButton(
-            icon: Icon(Icons.call, color: Colors.white, size: 24 * scale),
-            onPressed: onCallAudio,
-            tooltip: 'Audio Call',
-          ),
-      ],
-      _buildBadgeIcon(
-        context,
-        icon: Icons.task_alt,
-        count: taskCount,
-        color: const Color(0xFF14B8A6), // teal — matches web Tasks button
-        onPressed: onShowTasks ?? () {},
-        tooltip: 'Tasks',
-        scale: scale,
-      ),
-      _buildBadgeIcon(
-        context,
-        icon: Icons.draw_outlined,
-        count: excalidrawCount,
-        color: const Color(0xFFF97316), // orange — matches web Excalidraw button
-        onPressed: onShowExcalidraw ?? () {},
-        tooltip: 'Excalidraw',
-        scale: scale,
-      ),
-    ];
+        ),
+      );
+    } else if (!isSelfChat) {
+      actions.addAll([
+        IconButton(
+          icon: Icon(Icons.videocam, color: Colors.white, size: 22 * s),
+          onPressed: onCallVideo,
+          tooltip: 'Video Call',
+        ),
+        IconButton(
+          icon: Icon(Icons.call, color: Colors.white, size: 22 * s),
+          onPressed: onCallAudio,
+          tooltip: 'Audio Call',
+        ),
+      ]);
+    }
+
+    if (isCompact) {
+      // Collapse Tasks and Excalidraw into a PopupMenu
+      actions.add(
+        PopupMenuButton<String>(
+          icon: Icon(Icons.more_vert, color: Colors.white, size: 22 * s),
+          color: const Color(0xFF1E1E2E),
+          onSelected: (value) {
+            if (value == 'tasks') {
+              onShowTasks?.call();
+            } else if (value == 'excalidraw') {
+              onShowExcalidraw?.call();
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'tasks',
+              child: _buildPopupMenuItemChild(
+                icon: Icons.task_alt,
+                label: 'Tasks',
+                color: const Color(0xFF14B8A6),
+                count: taskCount,
+                scale: s,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'excalidraw',
+              child: _buildPopupMenuItemChild(
+                icon: Icons.draw_outlined,
+                label: 'Excalidraw',
+                color: const Color(0xFFF97316),
+                count: excalidrawCount,
+                scale: s,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      actions.addAll([
+        _buildBadgeIcon(
+          context,
+          icon: Icons.task_alt,
+          count: taskCount,
+          color: const Color(0xFF14B8A6),
+          onPressed: onShowTasks ?? () {},
+          tooltip: 'Tasks',
+          scale: s,
+        ),
+        _buildBadgeIcon(
+          context,
+          icon: Icons.draw_outlined,
+          count: excalidrawCount,
+          color: const Color(0xFFF97316),
+          onPressed: onShowExcalidraw ?? () {},
+          tooltip: 'Excalidraw',
+          scale: s,
+        ),
+      ]);
+    }
+
+    return actions;
   }
 
   // === Group title / actions ===
 
-  Widget _buildGroupTitle() {
+  Widget _buildGroupTitle(double s) {
     return GestureDetector(
       onTap: onShowMembers,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildGroupAvatar(),
-          SizedBox(width: 10 * scale),
+          _buildGroupAvatar(s),
+          SizedBox(width: 10 * s),
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -230,19 +278,19 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                   groupName ?? 'Group',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 15 * scale,
+                    fontSize: 15 * s,
                     fontWeight: FontWeight.w600,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (memberCount != null)
                   Padding(
-                    padding: EdgeInsets.only(top: 1 * scale),
+                    padding: EdgeInsets.only(top: 1 * s),
                     child: Text(
                       '$memberCount members',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 11.5 * scale,
+                        fontSize: 11.5 * s,
                         fontWeight: FontWeight.w500,
                         height: 1.12,
                       ),
@@ -257,11 +305,11 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  Widget _buildGroupAvatar() {
-    final double radius = 17 * scale;
+  Widget _buildGroupAvatar(double s) {
+    final double radius = 17 * s;
     final double imgDiameter = radius * 2;
     final colors = Group.getGradientColors(groupId ?? 0);
-    final fallback = Icon(Icons.people, color: Colors.white, size: 20 * scale);
+    final fallback = Icon(Icons.people, color: Colors.white, size: 20 * s);
     final url = groupAvatarUrl;
     return Container(
       width: imgDiameter,
@@ -289,95 +337,213 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  List<Widget> _buildGroupActions(BuildContext context) {
-    return [
-      if (onShowTasks != null)
-        _buildBadgeIcon(
-          context,
-          icon: Icons.task_alt,
-          count: taskCount,
-          color: const Color(0xFF14B8A6), // teal — matches 1:1 Tasks button
-          onPressed: onShowTasks!,
-          tooltip: 'Tasks',
-          scale: scale,
-        ),
-      if (onShowExcalidraw != null)
-        _buildBadgeIcon(
-          context,
-          icon: Icons.draw_outlined,
-          count: excalidrawCount,
-          color: const Color(0xFFF97316), // orange — matches 1:1 Excalidraw
-          onPressed: onShowExcalidraw!,
-          tooltip: 'Excalidraw',
-          scale: scale,
-        ),
-      if (onCallVideo != null)
-        IconButton(
-          icon: Icon(Icons.videocam, color: Colors.white, size: 24 * scale),
-          onPressed: onCallVideo,
-          tooltip: 'Video Call',
-        ),
-      if (onCallAudio != null)
-        IconButton(
-          icon: Icon(Icons.call, color: Colors.white, size: 24 * scale),
-          onPressed: onCallAudio,
-          tooltip: 'Audio Call',
-        ),
-      if (onRingDoorbell != null)
-        IconButton(
-          icon: Icon(Icons.notifications, color: Colors.white, size: 24 * scale),
-          onPressed: onRingDoorbell,
-          tooltip: 'Ring Doorbell',
-        ),
-      if (onShowMembers != null || onShowSettings != null)
+  List<Widget> _buildGroupActions(BuildContext context, bool isCompact, double s) {
+    final List<Widget> actions = [];
+
+    if (isCompact) {
+      if (onCallVideo != null) {
+        actions.add(
+          IconButton(
+            icon: Icon(Icons.videocam, color: Colors.white, size: 22 * s),
+            onPressed: onCallVideo,
+            tooltip: 'Video Call',
+          ),
+        );
+      }
+      if (onCallAudio != null) {
+        actions.add(
+          IconButton(
+            icon: Icon(Icons.call, color: Colors.white, size: 22 * s),
+            onPressed: onCallAudio,
+            tooltip: 'Audio Call',
+          ),
+        );
+      }
+
+      actions.add(
         PopupMenuButton<String>(
-          icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * scale),
+          icon: Icon(Icons.more_vert, color: Colors.white, size: 22 * s),
           color: const Color(0xFF1E1E2E),
           onSelected: (value) {
-            if (value == 'members') {
+            if (value == 'tasks') {
+              onShowTasks?.call();
+            } else if (value == 'excalidraw') {
+              onShowExcalidraw?.call();
+            } else if (value == 'doorbell') {
+              onRingDoorbell?.call();
+            } else if (value == 'members') {
               onShowMembers?.call();
             } else if (value == 'settings') {
               onShowSettings?.call();
             }
           },
           itemBuilder: (context) => [
+            if (onShowTasks != null)
+              PopupMenuItem(
+                value: 'tasks',
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.task_alt,
+                  label: 'Tasks',
+                  color: const Color(0xFF14B8A6),
+                  count: taskCount,
+                  scale: s,
+                ),
+              ),
+            if (onShowExcalidraw != null)
+              PopupMenuItem(
+                value: 'excalidraw',
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.draw_outlined,
+                  label: 'Excalidraw',
+                  color: const Color(0xFFF97316),
+                  count: excalidrawCount,
+                  scale: s,
+                ),
+              ),
+            if (onRingDoorbell != null)
+              PopupMenuItem(
+                value: 'doorbell',
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.notifications,
+                  label: 'Ring Doorbell',
+                  color: Colors.white,
+                  count: 0,
+                  scale: s,
+                ),
+              ),
             if (onShowMembers != null)
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'members',
-                child: Row(
-                  children: [
-                    Icon(Icons.people, color: Colors.white, size: 20),
-                    SizedBox(width: 12),
-                    Text('Members', style: TextStyle(color: Colors.white)),
-                  ],
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.people,
+                  label: 'Members',
+                  color: Colors.white,
+                  count: 0,
+                  scale: s,
                 ),
               ),
             if (onShowSettings != null)
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'settings',
-                child: Row(
-                  children: [
-                    Icon(Icons.settings, color: Colors.white, size: 20),
-                    SizedBox(width: 12),
-                    Text(
-                      'Group Settings',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ],
+                child: _buildPopupMenuItemChild(
+                  icon: Icons.settings,
+                  label: 'Group Settings',
+                  color: Colors.white,
+                  count: 0,
+                  scale: s,
                 ),
               ),
           ],
         ),
-    ];
+      );
+    } else {
+      if (onShowTasks != null) {
+        actions.add(
+          _buildBadgeIcon(
+            context,
+            icon: Icons.task_alt,
+            count: taskCount,
+            color: const Color(0xFF14B8A6),
+            onPressed: onShowTasks!,
+            tooltip: 'Tasks',
+            scale: s,
+          ),
+        );
+      }
+      if (onShowExcalidraw != null) {
+        actions.add(
+          _buildBadgeIcon(
+            context,
+            icon: Icons.draw_outlined,
+            count: excalidrawCount,
+            color: const Color(0xFFF97316),
+            onPressed: onShowExcalidraw!,
+            tooltip: 'Excalidraw',
+            scale: s,
+          ),
+        );
+      }
+      if (onCallVideo != null) {
+        actions.add(
+          IconButton(
+            icon: Icon(Icons.videocam, color: Colors.white, size: 24 * s),
+            onPressed: onCallVideo,
+            tooltip: 'Video Call',
+          ),
+        );
+      }
+      if (onCallAudio != null) {
+        actions.add(
+          IconButton(
+            icon: Icon(Icons.call, color: Colors.white, size: 24 * s),
+            onPressed: onCallAudio,
+            tooltip: 'Audio Call',
+          ),
+        );
+      }
+      if (onRingDoorbell != null) {
+        actions.add(
+          IconButton(
+            icon: Icon(Icons.notifications, color: Colors.white, size: 24 * s),
+            onPressed: onRingDoorbell,
+            tooltip: 'Ring Doorbell',
+          ),
+        );
+      }
+      if (onShowMembers != null || onShowSettings != null) {
+        actions.add(
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * s),
+            color: const Color(0xFF1E1E2E),
+            onSelected: (value) {
+              if (value == 'members') {
+                onShowMembers?.call();
+              } else if (value == 'settings') {
+                onShowSettings?.call();
+              }
+            },
+            itemBuilder: (context) => [
+              if (onShowMembers != null)
+                const PopupMenuItem(
+                  value: 'members',
+                  child: Row(
+                    children: [
+                      Icon(Icons.people, color: Colors.white, size: 20),
+                      SizedBox(width: 12),
+                      Text('Members', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+              if (onShowSettings != null)
+                const PopupMenuItem(
+                  value: 'settings',
+                  child: Row(
+                    children: [
+                      Icon(Icons.settings, color: Colors.white, size: 20),
+                      SizedBox(width: 12),
+                      Text(
+                        'Group Settings',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      }
+    }
+
+    return actions;
   }
 
   /// Avatar styled like the contacts list: colored background from the user's
   /// palette index, network image when present (fallback to initials on
   /// error), with a status dot overlay (green/yellow/grey).
-  Widget _buildAvatarWithStatus() {
-    final double radius = 17 * scale;
-    final double dotSize = 11 * scale;
-    final double initialsSize = 12 * scale;
+  Widget _buildAvatarWithStatus(double s) {
+    final double radius = 17 * s;
+    final double dotSize = 11 * s;
+    final double initialsSize = 12 * s;
     final double imgDiameter = radius * 2;
     final avatarColor = _avatarColorForUser();
 
@@ -447,9 +613,9 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     }
   }
 
-  Widget _buildHeaderStatusPill(double scale) {
+  Widget _buildHeaderStatusPill(double s) {
     final status = partnerStatus;
-    final statusFontSize = (11.5 * scale).clamp(11.0, 13.0).toDouble();
+    final statusFontSize = (11.5 * s).clamp(11.0, 13.0).toDouble();
     final Color color;
     final String label;
     switch (status) {
@@ -469,7 +635,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     }
 
     return Padding(
-      padding: EdgeInsets.only(top: 1 * scale),
+      padding: EdgeInsets.only(top: 1 * s),
       child: Text(
         label,
         style: TextStyle(
@@ -480,6 +646,53 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
         ),
         overflow: TextOverflow.ellipsis,
       ),
+    );
+  }
+
+  Widget _buildPopupMenuItemChild({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required int count,
+    required double scale,
+  }) {
+    return Row(
+      children: [
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Icon(icon, color: color, size: 20 * scale),
+            if (count > 0)
+              Positioned(
+                right: -4,
+                top: -4,
+                child: Container(
+                  padding: EdgeInsets.all(1.5 * scale),
+                  constraints: BoxConstraints(
+                    minWidth: 12 * scale,
+                    minHeight: 12 * scale,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFDC2626),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 8 * scale,
+                      fontWeight: FontWeight.w800,
+                      height: 1.0,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(color: Colors.white)),
+      ],
     );
   }
 

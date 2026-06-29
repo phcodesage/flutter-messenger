@@ -380,7 +380,37 @@ class _MessengerAppState extends State<MessengerApp>
       navigatorKey: NotificationHandler.navigatorKey,
       navigatorObservers: [PerformanceRouteObserver()],
       builder: (context, child) {
-        final appContent = child ?? const SizedBox.shrink();
+        final mediaQueryData = MediaQuery.of(context);
+        final double screenWidth = mediaQueryData.size.width;
+        // ignore: deprecated_member_use
+        final double systemScale = mediaQueryData.textScaleFactor;
+
+        // Calculate a responsive text scale factor that scales down 
+        // on smaller screens (high DPI / large display scale) to prevent cutoffs.
+        double factor = systemScale;
+        if (screenWidth < 360) {
+          factor = factor * 0.82;
+        } else if (screenWidth < 400) {
+          factor = factor * 0.90;
+        }
+
+        // Compensate if the system font size is set excessively large
+        if (systemScale > 1.15) {
+          factor = factor * (1.15 / systemScale);
+        }
+
+        // Clamp to a safe range (0.70 to 1.05) to keep UI compact and responsive
+        factor = factor.clamp(0.70, 1.05);
+
+        final clampedMediaQueryData = mediaQueryData.copyWith(
+          // ignore: deprecated_member_use
+          textScaleFactor: factor,
+        );
+
+        final appContent = MediaQuery(
+          data: clampedMediaQueryData,
+          child: child ?? const SizedBox.shrink(),
+        );
         // Top banner is shown only briefly: green "back online" right
         // after reconnecting, or red "no internet" right after dropping
         // the connection. Both auto-hide after 2 seconds.
