@@ -917,7 +917,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
           // Increment unread count if not at bottom (for incoming messages)
           if (!_isAtBottom) {
-            _unreadCount++;
+            setState(() {
+              _unreadCount++;
+            });
           }
         }
 
@@ -1120,6 +1122,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     setState(() {
       _messages.add(doorbellMessage);
+      if (!_isAtBottom) {
+        _unreadCount++;
+      }
     });
 
     // Only auto-scroll if user is at bottom, otherwise just show unread badge
@@ -1522,11 +1527,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom(animate: animate);
     });
-    Future<void>.delayed(const Duration(milliseconds: 80), () {
-      if (mounted) {
-        _scrollToBottom(animate: animate);
-      }
-    });
+    final delays = [100, 250, 400, 600];
+    for (final delay in delays) {
+      Future.delayed(Duration(milliseconds: delay), () {
+        if (mounted && _scrollController.hasClients) {
+          _scrollToBottom(animate: false);
+        }
+      });
+    }
   }
 
   void _scrollEntryToBottom() {
@@ -1555,12 +1563,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Scroll to bottom and mark all messages as read
   Future<void> _scrollToBottomAndMarkRead() async {
-    _scrollToBottomWithRetry();
+    _userHasScrolledManually = false;
+    _scrollToBottomWithRetry(animate: true);
 
     // Reset unread count
     setState(() {
       _unreadCount = 0;
-      _isAtBottom = true;
     });
 
     // Mark messages as viewed
@@ -2186,27 +2194,32 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                             child: Center(
                               child: GestureDetector(
                                 onTap: _scrollToBottomAndMarkRead,
-                                child: Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF7C3AED),
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.3),
-                                        blurRadius: 6,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
+                                child: SizedBox(
+                                  width: 36,
+                                  height: 36,
                                   child: Stack(
+                                    clipBehavior: Clip.none,
                                     alignment: Alignment.center,
                                     children: [
-                                      const Icon(
-                                        Icons.keyboard_arrow_down,
-                                        color: Colors.white,
-                                        size: 20,
+                                      Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF7C3AED),
+                                          shape: BoxShape.circle,
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(0.3),
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: const Icon(
+                                          Icons.keyboard_arrow_down,
+                                          color: Colors.white,
+                                          size: 20,
+                                        ),
                                       ),
                                       if (_unreadCount > 0)
                                         Positioned(
