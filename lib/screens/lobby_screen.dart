@@ -2051,8 +2051,10 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final userId = await StorageService.getUserId();
     if (useCacheFirst && userId != null) {
       final cached = await ChatCacheService.loadLobbyUsers(userId);
+      final cachedGroups = await ChatCacheService.loadGroups(userId);
       final starred = await StorageService.getStarredUserIds(userId);
-      if (cached.isNotEmpty && mounted) {
+      await _loadAiSessionPresence();
+      if ((cached.isNotEmpty || cachedGroups.isNotEmpty) && mounted) {
         final username = await StorageService.getUsername();
         final usersWithSelf = await _ensureSelfUserInLobby(
           users: cached,
@@ -2060,9 +2062,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
           currentUsername: username,
         );
         final sortedCachedUsers = _sortUsersByRecentActivity(usersWithSelf);
+        final sortedCachedGroups = _sortGroupsByRecentActivity(cachedGroups);
         setState(() {
           _lobbyUsers = sortedCachedUsers;
           _filteredUsers = List.from(sortedCachedUsers);
+          _groups = sortedCachedGroups;
           _starredUserIds = starred;
         });
         _filterUsers();
@@ -2119,6 +2123,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       }
       if (userId != null) {
         await ChatCacheService.saveLobbyUsers(userId, users);
+        await ChatCacheService.saveGroups(userId, results[1] as List<Group>);
       }
       // Refresh AI chat presence so its tile sorts correctly with fresh server data
       _loadAiSessionPresence();

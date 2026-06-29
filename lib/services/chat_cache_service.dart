@@ -41,6 +41,7 @@ class ChatCacheService {
   static String _groupConversationKey(int groupId) => 'group_$groupId';
 
   static String _lobbyKey(int currentUserId) => 'lobby_$currentUserId';
+  static String _groupsKey(int currentUserId) => 'groups_$currentUserId';
 
   static String _aiSessionKey(int currentUserId, int sessionId) =>
       'ai_${currentUserId}_$sessionId';
@@ -223,6 +224,31 @@ class ChatCacheService {
     return rawList
         .map(
           (item) => LobbyUser.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList();
+  }
+
+  /// Save group list snapshot for offline mode.
+  static Future<void> saveGroups(
+    int currentUserId,
+    List<Group> groups,
+  ) async {
+    if (!_initialized) return;
+    await _lobbyBox.put(_groupsKey(currentUserId), {
+      'groups': groups.map((g) => g.toJson()).toList(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// Load cached group list snapshot.
+  static Future<List<Group>> loadGroups(int currentUserId) async {
+    if (!_initialized) return [];
+    final data = _lobbyBox.get(_groupsKey(currentUserId));
+    if (data == null) return [];
+    final rawList = (data['groups'] as List?) ?? const [];
+    return rawList
+        .map(
+          (item) => Group.fromJson(Map<String, dynamic>.from(item as Map)),
         )
         .toList();
   }

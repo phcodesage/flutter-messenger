@@ -378,6 +378,8 @@ class GroupMessage {
   final String? excalidrawPinnedAt;
   final String? excalidrawTitle;
   final bool isEdited;
+  final List<String> seenByNames;
+  final List<String> deliveredToNames;
 
   GroupMessage({
     required this.id,
@@ -408,6 +410,8 @@ class GroupMessage {
     this.excalidrawPinnedAt,
     this.excalidrawTitle,
     this.isEdited = false,
+    this.seenByNames = const [],
+    this.deliveredToNames = const [],
   });
 
   /// Returns a copy with the given fields replaced. Only non-null arguments
@@ -442,6 +446,8 @@ class GroupMessage {
     String? excalidrawTitle,
     bool clearExcalidrawPinnedAt = false,
     bool? isEdited,
+    List<String>? seenByNames,
+    List<String>? deliveredToNames,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -475,6 +481,8 @@ class GroupMessage {
           : (excalidrawPinnedAt ?? this.excalidrawPinnedAt),
       excalidrawTitle: excalidrawTitle ?? this.excalidrawTitle,
       isEdited: isEdited ?? this.isEdited,
+      seenByNames: seenByNames ?? this.seenByNames,
+      deliveredToNames: deliveredToNames ?? this.deliveredToNames,
     );
   }
 
@@ -638,6 +646,8 @@ class GroupMessage {
         excalidrawPinnedAt: json['excalidraw_pinned_at'] as String?,
         excalidrawTitle: json['excalidraw_title'] as String?,
         isEdited: json['is_edited'] as bool? ?? json['isEdited'] as bool? ?? false,
+        seenByNames: (json['seen_by_names'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        deliveredToNames: (json['delivered_to_names'] as List?)?.map((e) => e.toString()).toList() ?? const [],
       );
     } catch (e, stackTrace) {
       debugPrint('❌ Error parsing GroupMessage: $e');
@@ -871,6 +881,8 @@ class GroupMessage {
       'is_excalidraw_link': isExcalidrawLink,
       'excalidraw_pinned_at': excalidrawPinnedAt,
       'excalidraw_title': excalidrawTitle,
+      'seen_by_names': seenByNames,
+      'delivered_to_names': deliveredToNames,
     };
   }
 

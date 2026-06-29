@@ -151,6 +151,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   List<Widget> _buildUserActions(BuildContext context, bool isCompact, double s) {
     final List<Widget> actions = [];
 
+    // 1. Call on other device OR Call buttons (if not self chat)
     if (!isSelfChat && callInProgressOnOtherDevice) {
       actions.add(
         Padding(
@@ -198,100 +199,27 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
       ]);
     }
 
-    if (isCompact) {
-      // Collapse Tasks and Excalidraw into a PopupMenu
-      actions.add(
-        PopupMenuButton<String>(
-          icon: Icon(Icons.more_vert, color: Colors.white, size: 22 * s),
-          color: const Color(0xFF1E1E2E),
-          onSelected: (value) {
-            if (value == 'tasks') {
-              onShowTasks?.call();
-            } else if (value == 'excalidraw') {
-              onShowExcalidraw?.call();
-            } else if (value == 'export') {
-              onExportChat?.call();
-            }
-          },
-          itemBuilder: (context) => [
-            PopupMenuItem(
-              value: 'tasks',
-              child: _buildPopupMenuItemChild(
-                icon: Icons.task_alt,
-                label: 'Tasks',
-                color: const Color(0xFF14B8A6),
-                count: taskCount,
-                scale: s,
-              ),
-            ),
-            PopupMenuItem(
-              value: 'excalidraw',
-              child: _buildPopupMenuItemChild(
-                icon: Icons.draw_outlined,
-                label: 'Excalidraw',
-                color: const Color(0xFFF97316),
-                count: excalidrawCount,
-                scale: s,
-              ),
-            ),
-            if (onExportChat != null)
-              PopupMenuItem(
-                value: 'export',
-                child: _buildPopupMenuItemChild(
-                  icon: Icons.download_rounded,
-                  label: 'Export Chat',
-                  color: Colors.white,
-                  count: 0,
-                  scale: s,
-                ),
-              ),
-          ],
-        ),
-      );
-    } else {
-      actions.addAll([
-        _buildBadgeIcon(
-          context,
-          icon: Icons.task_alt,
-          count: taskCount,
-          color: const Color(0xFF14B8A6),
-          onPressed: onShowTasks ?? () {},
-          tooltip: 'Tasks',
-          scale: s,
-        ),
-        _buildBadgeIcon(
-          context,
-          icon: Icons.draw_outlined,
-          count: excalidrawCount,
-          color: const Color(0xFFF97316),
-          onPressed: onShowExcalidraw ?? () {},
-          tooltip: 'Excalidraw',
-          scale: s,
-        ),
-        if (onExportChat != null)
-          PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * s),
-            color: const Color(0xFF1E1E2E),
-            onSelected: (value) {
-              if (value == 'export') {
-                onExportChat?.call();
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'export',
-                child: Row(
-                  children: [
-                    Icon(Icons.download_rounded, color: Colors.white, size: 20),
-                    SizedBox(width: 12),
-                    Text('Export Chat', style: TextStyle(color: Colors.white)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-      ]);
-    }
+    // 2. Put Tasks and Excalidraw icons outside, right after the call icons
+    actions.addAll([
+      _buildBadgeIcon(
+        context,
+        icon: Icons.task_alt,
+        count: taskCount,
+        color: const Color(0xFF14B8A6),
+        onPressed: onShowTasks ?? () {},
+        tooltip: 'Tasks',
+        scale: s,
+      ),
+      _buildBadgeIcon(
+        context,
+        icon: Icons.draw_outlined,
+        count: excalidrawCount,
+        color: const Color(0xFFF97316),
+        onPressed: onShowExcalidraw ?? () {},
+        tooltip: 'Excalidraw',
+        scale: s,
+      ),
+    ]);
 
     return actions;
   }
@@ -377,35 +305,45 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   List<Widget> _buildGroupActions(BuildContext context, bool isCompact, double s) {
     final List<Widget> actions = [];
 
-    if (isCompact) {
-      if (onCallVideo != null) {
-        actions.add(
-          IconButton(
-            icon: Icon(Icons.videocam, color: Colors.white, size: 22 * s),
-            onPressed: onCallVideo,
-            tooltip: 'Video Call',
-          ),
-        );
-      }
-      if (onCallAudio != null) {
-        actions.add(
-          IconButton(
-            icon: Icon(Icons.call, color: Colors.white, size: 22 * s),
-            onPressed: onCallAudio,
-            tooltip: 'Audio Call',
-          ),
-        );
-      }
+    // Prioritize Tasks and Excalidraw: always show directly in group header
+    if (onShowTasks != null) {
+      actions.add(
+        _buildBadgeIcon(
+          context,
+          icon: Icons.task_alt,
+          count: taskCount,
+          color: const Color(0xFF14B8A6),
+          onPressed: onShowTasks!,
+          tooltip: 'Tasks',
+          scale: s,
+        ),
+      );
+    }
+    if (onShowExcalidraw != null) {
+      actions.add(
+        _buildBadgeIcon(
+          context,
+          icon: Icons.draw_outlined,
+          count: excalidrawCount,
+          color: const Color(0xFFF97316),
+          onPressed: onShowExcalidraw!,
+          tooltip: 'Excalidraw',
+          scale: s,
+        ),
+      );
+    }
 
+    if (isCompact) {
+      // In compact mode: collapse Call Video, Call Audio, Doorbell, Members, Settings, Export into PopupMenu
       actions.add(
         PopupMenuButton<String>(
           icon: Icon(Icons.more_vert, color: Colors.white, size: 22 * s),
           color: const Color(0xFF1E1E2E),
           onSelected: (value) {
-            if (value == 'tasks') {
-              onShowTasks?.call();
-            } else if (value == 'excalidraw') {
-              onShowExcalidraw?.call();
+            if (value == 'video') {
+              onCallVideo?.call();
+            } else if (value == 'audio') {
+              onCallAudio?.call();
             } else if (value == 'doorbell') {
               onRingDoorbell?.call();
             } else if (value == 'members') {
@@ -417,26 +355,26 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
             }
           },
           itemBuilder: (context) => [
-            if (onShowTasks != null)
-              PopupMenuItem(
-                value: 'tasks',
-                child: _buildPopupMenuItemChild(
-                  icon: Icons.task_alt,
-                  label: 'Tasks',
-                  color: const Color(0xFF14B8A6),
-                  count: taskCount,
-                  scale: s,
+            if (onCallVideo != null)
+              const PopupMenuItem(
+                value: 'video',
+                child: Row(
+                  children: [
+                    Icon(Icons.videocam, color: Colors.white, size: 20),
+                    SizedBox(width: 12),
+                    Text('Video Call', style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
-            if (onShowExcalidraw != null)
-              PopupMenuItem(
-                value: 'excalidraw',
-                child: _buildPopupMenuItemChild(
-                  icon: Icons.draw_outlined,
-                  label: 'Excalidraw',
-                  color: const Color(0xFFF97316),
-                  count: excalidrawCount,
-                  scale: s,
+            if (onCallAudio != null)
+              const PopupMenuItem(
+                value: 'audio',
+                child: Row(
+                  children: [
+                    Icon(Icons.call, color: Colors.white, size: 20),
+                    SizedBox(width: 12),
+                    Text('Audio Call', style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
             if (onRingDoorbell != null)
@@ -487,32 +425,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
         ),
       );
     } else {
-      if (onShowTasks != null) {
-        actions.add(
-          _buildBadgeIcon(
-            context,
-            icon: Icons.task_alt,
-            count: taskCount,
-            color: const Color(0xFF14B8A6),
-            onPressed: onShowTasks!,
-            tooltip: 'Tasks',
-            scale: s,
-          ),
-        );
-      }
-      if (onShowExcalidraw != null) {
-        actions.add(
-          _buildBadgeIcon(
-            context,
-            icon: Icons.draw_outlined,
-            count: excalidrawCount,
-            color: const Color(0xFFF97316),
-            onPressed: onShowExcalidraw!,
-            tooltip: 'Excalidraw',
-            scale: s,
-          ),
-        );
-      }
+      // Non-compact: show other buttons directly
       if (onCallVideo != null) {
         actions.add(
           IconButton(
@@ -602,6 +515,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
 
     return actions;
   }
+
 
   /// Avatar styled like the contacts list: colored background from the user's
   /// palette index, network image when present (fallback to initials on

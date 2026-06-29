@@ -43,11 +43,17 @@ class ChatMessageBubble extends StatefulWidget {
     required this.buildStatusIndicator,
     this.senderName,
     this.senderColor,
+    this.seenByNames,
+    this.deliveredToNames,
   });
 
   final Message message;
   final bool isSentByMe;
   final double scale;
+
+  /// Group chat only: seen by and delivered to tracking lists
+  final List<String>? seenByNames;
+  final List<String>? deliveredToNames;
 
   /// Group chat only: name of the sender shown as a colored label at the top of
   /// incoming bubbles (WhatsApp-style). Null/empty in 1:1 chat, where it is
@@ -1043,11 +1049,15 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     double scale, {
     required bool canSaveAttachment,
   }) {
+    final hasSeenNames = widget.seenByNames != null && widget.seenByNames!.isNotEmpty;
+    final hasDeliveredNames = widget.deliveredToNames != null && widget.deliveredToNames!.isNotEmpty;
+
+    Widget statusRow;
     if (!canSaveAttachment) {
-      return Padding(
+      statusRow = Padding(
         padding: EdgeInsets.symmetric(
           horizontal: 16 * scale,
-          vertical: 6 * scale,
+          vertical: 4 * scale,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1062,26 +1072,56 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           ],
         ),
       );
+    } else {
+      statusRow = Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: 16 * scale,
+          vertical: 4 * scale,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Text(
+              '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
+              style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
+            ),
+            SizedBox(width: 4 * scale),
+            widget.buildStatusIndicator(widget.statusForUi(message), scale),
+            const Spacer(),
+            _buildFooterSaveAction(message, scale),
+          ],
+        ),
+      );
     }
 
-    return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: 16 * scale,
-        vertical: 6 * scale,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        children: [
-          Text(
-            '${message.isEdited ? '(edited) ' : ''}${message.formattedTime}',
-            style: TextStyle(color: Colors.white70, fontSize: 11 * scale),
+    if (!hasSeenNames && !hasDeliveredNames) {
+      return statusRow;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        statusRow,
+        Padding(
+          padding: EdgeInsets.only(
+            left: 16 * scale,
+            right: 16 * scale,
+            bottom: 6 * scale,
           ),
-          SizedBox(width: 4 * scale),
-          widget.buildStatusIndicator(widget.statusForUi(message), scale),
-          const Spacer(),
-          _buildFooterSaveAction(message, scale),
-        ],
-      ),
+          child: Text(
+            hasSeenNames
+                ? 'Seen by: ${widget.seenByNames!.join(', ')}'
+                : 'Delivered to: ${widget.deliveredToNames!.join(', ')}',
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: 9.5 * scale,
+              fontStyle: FontStyle.italic,
+            ),
+            textAlign: TextAlign.end,
+          ),
+        ),
+      ],
     );
   }
 

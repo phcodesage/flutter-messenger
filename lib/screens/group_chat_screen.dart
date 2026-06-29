@@ -549,6 +549,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
     });
 
+    // Listen for message status updates (delivered/seen)
+    _socketService.addListener('messageStatusUpdated', key, (data) {
+      debugPrint('✓ [GROUP CHAT] Status updated: $data');
+      _handleMessageStatusUpdate(data);
+    });
+
+    // Listen for message delivery confirmations
+    _socketService.addListener('messageDelivered', key, (data) {
+      debugPrint('✓ [GROUP CHAT] Message delivered confirmation: $data');
+      final messageId = _toInt(data['message_id']);
+      if (messageId != null) {
+        _handleMessageStatusUpdate({
+          'message_id': messageId,
+          'status': 'delivered',
+        });
+      }
+    });
+
     // File message (also comes through groupNewMessage)
     _socketService.addListener('groupFileMessage', key, (data) {
       // debugPrint('📎 [GROUP FILE MESSAGE] Event received: $data');
@@ -1055,6 +1073,63 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           debugPrint(
             '📨 [GROUP MESSAGE SENT] Ignoring message from other user: $senderId',
           );
+        }
+      });
+    }
+  }
+
+  int? _toInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+  void _handleMessageStatusUpdate(Map<String, dynamic> data) {
+    final messageId = _toInt(data['message_id']);
+    final status = data['status'] as String?;
+
+    if (messageId == null || status == null) return;
+
+    final seenByName = data['seen_by_name'] as String?;
+    final deliveredByName = data['delivered_by_name'] as String?;
+
+    // Status rank to ensure status is never downgraded
+    const statusRank = {'sending': 0, 'sent': 1, 'delivered': 2, 'seen': 3};
+
+    if (mounted) {
+      setState(() {
+        final index = _messages.indexWhere((m) => m.id == messageId);
+        if (index != -1) {
+          final message = _messages[index];
+          final currentRank = statusRank[message.status] ?? 0;
+          final incomingRank = statusRank[status] ?? 0;
+          if (incomingRank < currentRank) {
+            debugPrint(
+              '⚠️ Ignoring status downgrade for group msg $messageId: ${message.status} → $status',
+            );
+            return;
+          }
+
+          // Accumulate names
+          final List<String> updatedSeen = List<String>.from(message.seenByNames);
+          if (seenByName != null && seenByName.isNotEmpty && !updatedSeen.contains(seenByName)) {
+            updatedSeen.add(seenByName);
+          }
+
+          final List<String> updatedDelivered = List<String>.from(message.deliveredToNames);
+          if (deliveredByName != null && deliveredByName.isNotEmpty && !updatedDelivered.contains(deliveredByName)) {
+            updatedDelivered.add(deliveredByName);
+          }
+
+          _messages[index] = message.copyWith(
+            status: status,
+            seenByNames: updatedSeen,
+            deliveredToNames: updatedDelivered,
+          );
+          
+          // Persist cached group messages immediately so offline status matches
+          unawaited(ChatCacheService.saveGroupMessages(widget.group.id, _messages));
         }
       });
     }
@@ -1676,6 +1751,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       timestamp: now.toIso8601String(),
       timestampMs: now.millisecondsSinceEpoch,
       replyToId: replyToId,
+      status: 'pending',
     );
 
     // Clear input and reply state immediately for better UX
@@ -1772,6 +1848,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       fileName: fileName,
       fileSize: fileSize,
       fileType: mimeType,
+      status: 'pending',
     );
 
     // Add optimistic message immediately for responsive UI
@@ -2862,6 +2939,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       buildStatusIndicator: _buildStatusIndicator,
       senderName: isSentByMe ? null : message.sender?.fullName,
       senderColor: _senderColorForId(message.senderId),
+      seenByNames: message.seenByNames,
+      deliveredToNames: message.deliveredToNames,
     );
   }
 
@@ -8176,17 +8255,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     }
                   },
                 ),
-              ListTile(
-                leading: const Icon(Icons.people, color: Colors.white),
-                title: const Text(
-                  'View Members',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _showGroupMembersSheet();
-                },
-              ),
+
               ListTile(
                 leading: const Icon(Icons.exit_to_app, color: Colors.red),
                 title: const Text(
