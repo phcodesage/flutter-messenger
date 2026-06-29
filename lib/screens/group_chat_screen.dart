@@ -74,6 +74,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _inputFocusNode = FocusNode();
   final ScrollController _inputScrollController = ScrollController();
+  OverlayEntry? _mentionOverlayEntry;
 
   /// Tap recognizers created for linkified message URLs; disposed in dispose().
   final List<TapGestureRecognizer> _linkRecognizers = [];
@@ -2105,6 +2106,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   @override
   void dispose() {
+    _hideMentionOverlay();
     // Clear active chat when leaving group chat screen
     ActiveChatService().clearActiveChat();
 
@@ -8961,6 +8963,201 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
+  String _getFirstName(String fullName) {
+    final trimmed = fullName.trim();
+    if (trimmed.isEmpty) return '';
+    final parts = trimmed.split(' ');
+    final first = parts.first;
+    if (first.isEmpty) return '';
+    return first[0].toUpperCase() + first.substring(1);
+  }
+
+  void _insertMentionName(String fullName) {
+    final raw = _getFirstName(fullName);
+    if (raw.isEmpty) return;
+    final nameToInsert = '@$raw';
+
+    final text = _messageController.text;
+    final sel = _messageController.selection;
+    final int start = sel.isValid ? sel.start : text.length;
+    final int end = sel.isValid ? sel.end : text.length;
+    final before = text.substring(0, start);
+    final after = text.substring(end);
+
+    final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
+        ? ''
+        : ' ';
+    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
+    final spaceAfter = inputIsEmpty
+        ? ' '
+        : (after.isEmpty || RegExp(r'^\s').hasMatch(after))
+        ? ''
+        : ' ';
+
+    final inserted = '$spaceBefore$nameToInsert$spaceAfter';
+    final newText = '$before$inserted$after';
+    final caret = (before + inserted).length;
+
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: caret),
+      composing: TextRange.empty,
+    );
+    _inputFocusNode.requestFocus();
+  }
+
+  void _hideMentionOverlay() {
+    _mentionOverlayEntry?.remove();
+    _mentionOverlayEntry = null;
+  }
+
+  void _showMentionOverlay(BuildContext context, List<String> otherMembers) {
+    _hideMentionOverlay();
+
+    final RenderBox button = context.findRenderObject() as RenderBox;
+    final RenderBox overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+    
+    final buttonOffset = button.localToGlobal(Offset.zero, ancestor: overlay);
+
+    _mentionOverlayEntry = OverlayEntry(
+      builder: (context) {
+        return Stack(
+          children: [
+            GestureDetector(
+              onTap: _hideMentionOverlay,
+              behavior: HitTestBehavior.translucent,
+              child: Container(
+                color: Colors.transparent,
+              ),
+            ),
+            Positioned(
+              left: buttonOffset.dx,
+              bottom: overlay.size.height - buttonOffset.dy + 4,
+              child: Material(
+                color: Colors.transparent,
+                elevation: 12,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1E2E),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF3F3F5F),
+                      width: 1,
+                    ),
+                  ),
+                  constraints: BoxConstraints(
+                    maxHeight: 44,
+                    maxWidth: overlay.size.width - buttonOffset.dx - 16,
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: otherMembers.map((member) {
+                        final isLast = member == otherMembers.last;
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            InkWell(
+                              onTap: () {
+                                _insertMentionName(member);
+                                _hideMentionOverlay();
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                height: 44,
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                child: Text(
+                                  member,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (!isLast)
+                              Container(
+                                width: 1,
+                                height: 16,
+                                color: const Color(0xFF3F3F5F),
+                              ),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    Navigator.of(context).overlay!.insert(_mentionOverlayEntry!);
+  }
+
+  Widget _buildGroupMentionChip() {
+    return Builder(
+      builder: (context) {
+        final otherMembers = _memberNamesMap.entries
+            .where((e) => e.key != _currentUserId)
+            .map((e) => e.value)
+            .toList();
+
+        final String label;
+        if (otherMembers.isNotEmpty) {
+          label = _getFirstName(otherMembers.first);
+        } else {
+          label = 'Mention';
+        }
+
+        return Material(
+          color: const Color(0xFF0F766E),
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              if (otherMembers.isNotEmpty) {
+                _insertMentionName(otherMembers.first);
+              }
+            },
+            onLongPress: otherMembers.isEmpty ? null : () {
+              HapticFeedback.mediumImpact();
+              _showMentionOverlay(context, otherMembers);
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              height: 40,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.visible,
+                softWrap: true,
+              ),
+            ),
+          ),
+        );
+      }
+    );
+  }
+
   void _insertGroupName() {
     final raw = _groupName.trim();
     if (raw.isEmpty) return;
@@ -9028,11 +9225,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ),
     ];
     final bottomRow = <Widget>[
-      _groupActionChip(
-        label: nameLabel.isEmpty ? 'Group' : nameLabel,
-        backgroundColor: const Color(0xFF0F766E),
-        onPressed: _insertGroupName,
-      ),
+      _buildGroupMentionChip(),
       _groupActionChip(
         label: 'Paste',
         backgroundColor: const Color(0xFF1D4ED8),
