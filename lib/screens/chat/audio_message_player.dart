@@ -9,10 +9,12 @@ class AudioMessagePlayer extends StatefulWidget {
     super.key,
     required this.audioUrl,
     this.fileSize,
+    this.initialDuration,
   });
 
   final String audioUrl;
   final int? fileSize;
+  final double? initialDuration;
 
   @override
   State<AudioMessagePlayer> createState() => _AudioMessagePlayerState();
@@ -30,6 +32,9 @@ class _AudioMessagePlayerState extends State<AudioMessagePlayer> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialDuration != null && widget.initialDuration! > 0) {
+      _duration = Duration(milliseconds: (widget.initialDuration! * 1000).round());
+    }
     _setupAudioPlayer();
   }
 
@@ -50,6 +55,19 @@ class _AudioMessagePlayerState extends State<AudioMessagePlayer> {
         });
       }
     });
+
+    if (_duration == Duration.zero) {
+      _probeAudioSource();
+    }
+  }
+
+  Future<void> _probeAudioSource() async {
+    try {
+      final source = await _resolveSource();
+      if (mounted && !_isPlaying) {
+        await _audioPlayer.setSource(source);
+      }
+    } catch (_) {}
   }
 
   @override

@@ -2926,7 +2926,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ],
           // Audio/Voice message content
           if (isAudio && message.fileUrl != null) ...[
-            _buildAudioPlayer(message.fileUrl!),
+            _buildAudioPlayer(message.fileUrl!, duration: message.duration),
           ] else if (isAudio && message.fileUrl == null) ...[
             // Fallback for audio messages without fileUrl
             Container(
@@ -3418,8 +3418,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   /// Build audio player widget
-  Widget _buildAudioPlayer(String audioUrl) {
-    return _AudioMessagePlayer(audioUrl: audioUrl);
+  Widget _buildAudioPlayer(String audioUrl, {double? duration}) {
+    return _AudioMessagePlayer(
+      audioUrl: audioUrl,
+      initialDuration: duration,
+    );
   }
 
   Widget _buildTypingIndicator() {
@@ -8566,8 +8569,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 class _AudioMessagePlayer extends StatefulWidget {
   final String audioUrl;
   final int? fileSize;
+  final double? initialDuration;
 
-  const _AudioMessagePlayer({required this.audioUrl, this.fileSize});
+  const _AudioMessagePlayer({
+    required this.audioUrl,
+    this.fileSize,
+    this.initialDuration,
+  });
 
   @override
   State<_AudioMessagePlayer> createState() => _AudioMessagePlayerState();
@@ -8585,6 +8593,9 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialDuration != null && widget.initialDuration! > 0) {
+      _duration = Duration(milliseconds: (widget.initialDuration! * 1000).round());
+    }
     _setupAudioPlayer();
   }
 
@@ -8605,6 +8616,25 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
         });
       }
     });
+
+    if (_duration == Duration.zero) {
+      _probeAudioSource();
+    }
+  }
+
+  Future<void> _probeAudioSource() async {
+    try {
+      Source source;
+      final cached = await DefaultCacheManager().getFileFromCache(widget.audioUrl);
+      if (cached != null) {
+        source = DeviceFileSource(cached.file.path);
+      } else {
+        source = UrlSource(widget.audioUrl);
+      }
+      if (mounted && !_isPlaying) {
+        await _audioPlayer.setSource(source);
+      }
+    } catch (_) {}
   }
 
   @override

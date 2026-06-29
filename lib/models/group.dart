@@ -312,6 +312,7 @@ class GroupMessage {
   final String? replyPreview;
   final Map<String, dynamic> reactions;
   final String? caption;
+  final double? duration;
 
   /// Delivery status for the shared chat bubble UI.
   /// 'pending' | 'sent' | 'delivered' | 'read' | 'failed'. Groups don't track
@@ -355,6 +356,7 @@ class GroupMessage {
     this.replyPreview,
     this.reactions = const {},
     this.caption,
+    this.duration,
     this.status = 'sent',
     this.localFilePath,
     this.isTask = false,
@@ -456,6 +458,7 @@ class GroupMessage {
       fileType: fileType,
       isDeleted: isDeleted,
       caption: caption,
+      duration: duration,
       localFilePath: localFilePath,
       isTask: isTask,
       taskCreatedAt: taskCreatedAt,
@@ -578,6 +581,7 @@ class GroupMessage {
         replyPreview: replyPreviewText,
         reactions: _normalizeGroupReactionsMap(json['reactions']),
         caption: caption,
+        duration: (json['duration'] as num?)?.toDouble(),
         status: json['status'] as String? ?? 'sent',
         isTask: json['is_task'] as bool? ?? false,
         taskCreatedAt: json['task_created_at'] as String?,

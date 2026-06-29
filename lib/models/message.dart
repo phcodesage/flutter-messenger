@@ -33,6 +33,7 @@ class Message {
   final String? pinnedAt;
   final int? pinnedByUserId;
   final String? caption;
+  final double? duration;
 
   /// Local file path for optimistic media messages (before upload completes).
   /// Used to display the image/video from disk while the upload is in progress.
@@ -71,6 +72,7 @@ class Message {
     this.pinnedAt,
     this.pinnedByUserId,
     this.caption,
+    this.duration,
     this.localFilePath,
   });
 
@@ -305,6 +307,7 @@ class Message {
       pinnedAt: json['pinned_at'] as String?,
       pinnedByUserId: json['pinned_by_user_id'] as int?,
       caption: caption,
+      duration: (json['duration'] as num?)?.toDouble(),
     );
   }
 

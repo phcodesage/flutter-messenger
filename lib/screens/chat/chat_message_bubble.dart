@@ -244,6 +244,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
               AudioMessagePlayer(
                 audioUrl: widget.message.fileUrl!,
                 fileSize: widget.message.fileSize,
+                initialDuration: widget.message.duration,
               ),
             if (isContact)
               ContactCardWidget(
