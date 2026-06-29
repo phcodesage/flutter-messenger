@@ -15653,7 +15653,17 @@ class _ChatScreenState extends State<ChatScreen>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(displayEmoji, style: const TextStyle(fontSize: 16)),
+                  Text(
+                    displayEmoji,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontFamilyFallback: [
+                        'Apple Color Emoji',
+                        'Android Emoji',
+                        'Noto Color Emoji',
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 2),
                   Text(
                     '${users.length}',
@@ -15774,7 +15784,14 @@ class _ChatScreenState extends State<ChatScreen>
                         children: [
                           Text(
                             _ensureColorEmoji(emoji),
-                            style: const TextStyle(fontSize: 24),
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontFamilyFallback: [
+                                'Apple Color Emoji',
+                                'Android Emoji',
+                                'Noto Color Emoji',
+                              ],
+                            ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(

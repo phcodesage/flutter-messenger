@@ -219,6 +219,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _socketService.joinGroupChat(widget.group.id);
 
     unawaited(_loadCommonPhrases());
+    unawaited(_loadGroupMembers());
   }
 
   /// Load mobile-pinned common phrases for the quick bar above the composer.
@@ -1114,6 +1115,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ..._messages[index].toJson(),
             'reactions': reactions,
           });
+          // Persist the updated messages containing the new reactions to the local cache
+          unawaited(ChatCacheService.saveGroupMessages(widget.group.id, _messages));
         }
       });
     }
@@ -2073,27 +2076,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  Future<void> _addReaction(GroupMessage message, String emoji) async {
-    try {
-      final reactions = await GroupService.addReaction(
-        groupId: widget.group.id,
-        messageId: message.id,
-        emoji: emoji,
-      );
+  void _toggleGroupReaction(int messageId, String emoji) {
+    final currentUserIdStr = _currentUserId?.toString() ?? '';
+    if (currentUserIdStr.isEmpty) return;
 
-      if (mounted) {
-        setState(() {
-          final index = _messages.indexWhere((m) => m.id == message.id);
-          if (index != -1) {
-            _messages[index] = GroupMessage.fromJson({
-              ..._messages[index].toJson(),
-              'reactions': reactions,
-            });
-          }
-        });
+    GroupMessage? gm;
+    for (final m in _messages) {
+      if (m.id == messageId) {
+        gm = m;
+        break;
       }
-    } catch (e) {
-      debugPrint('Error adding reaction: $e');
+    }
+    if (gm == null) return;
+
+    final users = gm.reactions[emoji] as List? ?? [];
+    final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
+    final alreadyReacted = users.map((u) => u.toString()).any((u) =>
+        u == currentUserIdStr || (myName != null && u == myName));
+
+    if (alreadyReacted) {
+      debugPrint('👍 [GROUP] Clearing reaction $emoji on message $messageId');
+      _socketService.clearGroupReaction(messageId, widget.group.id, emoji);
+    } else {
+      debugPrint('👍 [GROUP] Setting reaction $emoji on message $messageId');
+      _socketService.setGroupReaction(messageId, widget.group.id, emoji);
     }
   }
 
@@ -2422,7 +2428,205 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     return result;
   }
 
-  /// Reaction pills shown below a bubble (same chip style as before).
+  final Map<int, String> _memberNamesMap = {};
+
+  Future<void> _loadGroupMembers() async {
+    try {
+      final details = await GroupService.getGroupDetails(widget.group.id);
+      final members = details['members'] as List<GroupMember>? ?? [];
+      if (mounted) {
+        setState(() {
+          _memberNamesMap.clear();
+          for (final m in members) {
+            _memberNamesMap[m.userId] = m.user.fullName;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading group members: $e');
+    }
+  }
+
+  String _resolveGroupReactorName(String userIdStr) {
+    final currentUserStr = _currentUserId?.toString() ?? '';
+    if (userIdStr == currentUserStr) return 'You';
+    final parsedId = int.tryParse(userIdStr);
+    if (parsedId != null) {
+      if (parsedId == _currentUserId) return 'You';
+      if (_memberNamesMap.containsKey(parsedId)) {
+        return _memberNamesMap[parsedId]!;
+      }
+      return 'User $userIdStr';
+    }
+    // It's already a display name string
+    if (_currentUserId != null &&
+        _memberNamesMap.containsKey(_currentUserId) &&
+        _memberNamesMap[_currentUserId] == userIdStr) {
+      return 'You';
+    }
+    return userIdStr;
+  }
+
+  void _showGroupReactorsSheet(int messageId) {
+    GroupMessage? gm;
+    for (final m in _messages) {
+      if (m.id == messageId) {
+        gm = m;
+        break;
+      }
+    }
+    if (gm == null || gm.reactions.isEmpty) return;
+    final GroupMessage msg = gm;
+
+    final currentUserStr = _currentUserId?.toString() ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Reactions',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...msg.reactions.entries.where((e) {
+                  final list = e.value as List?;
+                  return list != null && list.isNotEmpty;
+                }).map((entry) {
+                  final emoji = entry.key;
+                  final users = entry.value as List;
+                  final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
+                  final iReacted = users.map((u) => u.toString()).any((u) =>
+                      u == currentUserStr || (myName != null && u == myName));
+                  final displayNames = users
+                      .map((id) => _resolveGroupReactorName(id.toString()))
+                      .toList();
+                  return GestureDetector(
+                    onTap: iReacted
+                        ? () {
+                            _toggleGroupReaction(messageId, emoji);
+                            Navigator.of(ctx).pop();
+                          }
+                        : null,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 8,
+                      ),
+                      margin: const EdgeInsets.only(bottom: 4),
+                      decoration: BoxDecoration(
+                        color: iReacted
+                            ? const Color(0xFF2A2A3E)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            _ensureColorEmoji(emoji),
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontFamilyFallback: [
+                                'Apple Color Emoji',
+                                'Android Emoji',
+                                'Noto Color Emoji',
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  displayNames.join(', '),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 2,
+                                ),
+                                if (iReacted)
+                                  const Text(
+                                    'Tap to remove',
+                                    style: TextStyle(
+                                      color: Colors.redAccent,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Ensure emoji uses color presentation (appends U+FE0F if needed)
+  /// Characters like ❤️ (U+2764) render as black text on Android without this.
+  String _ensureColorEmoji(String emoji) {
+    const variationSelector = '\uFE0F';
+    // Characters that need the variation selector for color rendering
+    const needsSelector = <int>{
+      0x2764, // ❤️
+      0x2602, // ☂
+      0x2614, // ☔
+      0x263A, // ☺
+      0x2B50, // ⭐
+      0x2600, // ☀
+      0x2601, // ☁
+      0x260E, // ☎
+      0x2709, // ✉
+      0x270F, // ✍
+      0x2744, // ❄
+      0x2728, // ✨
+      0x2702, // ✂
+      0x26A1, // ⚡
+      0x2615, // ☕
+    };
+    if (emoji.isNotEmpty &&
+        needsSelector.contains(emoji.runes.first) &&
+        !emoji.contains(variationSelector)) {
+      return emoji + variationSelector;
+    }
+    return emoji;
+  }
+
+  /// Reaction pills shown below a bubble.
   Widget _buildGroupReactionPills(int messageId) {
     GroupMessage? gm;
     for (final m in _messages) {
@@ -2432,25 +2636,64 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
     }
     if (gm == null || gm.reactions.isEmpty) return const SizedBox.shrink();
-    return Wrap(
-      spacing: 4,
-      children: gm.reactions.entries.map((entry) {
-        final emoji = entry.key;
-        final users = entry.value as List;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E293B),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF420796), width: 1),
-          ),
-          child: Text(
-            '$emoji ${users.length}',
-            style: const TextStyle(fontSize: 12, color: Colors.white),
+
+    final currentUserStr = _currentUserId?.toString() ?? '';
+    final pills = <Widget>[];
+
+    gm.reactions.forEach((emoji, usersList) {
+      final users = usersList as List;
+      if (users.isNotEmpty) {
+        final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
+        final iReacted = users.map((u) => u.toString()).any((u) =>
+            u == currentUserStr || (myName != null && u == myName));
+        pills.add(
+          GestureDetector(
+            onTap: () => _showGroupReactorsSheet(messageId),
+            child: Container(
+              margin: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: iReacted
+                    ? const Color(0xFF3A3A5C)
+                    : const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: iReacted
+                      ? const Color(0xFF6D28D9).withValues(alpha: 0.5)
+                      : const Color(0xFF420796),
+                  width: iReacted ? 1.0 : 0.5,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _ensureColorEmoji(emoji),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontFamilyFallback: [
+                        'Apple Color Emoji',
+                        'Android Emoji',
+                        'Noto Color Emoji',
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${users.length}',
+                    style: const TextStyle(fontSize: 11, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
           ),
         );
-      }).toList(),
-    );
+      }
+    });
+
+    if (pills.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(spacing: 2, runSpacing: 2, children: pills);
   }
 
   void _showGroupReactionPicker(
@@ -2470,7 +2713,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     ReactionPicker.show(
       context: context,
       position: position,
-      onReactionSelected: (emoji) => _addReaction(target, emoji),
+      onReactionSelected: (emoji) => _toggleGroupReaction(target.id, emoji),
     );
   }
 
