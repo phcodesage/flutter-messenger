@@ -4020,26 +4020,34 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
             child: Row(
               children: [
                 // Group avatar
-                CircleAvatar(
-                  radius: _cs(context, 26),
-                  backgroundColor: const Color(0xFF00D9FF),
-                  child: group.avatarUrl != null
+                Container(
+                  width: _cs(context, 52),
+                  height: _cs(context, 52),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: group.gradientColors,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
+                  ),
+                  child: group.avatarUrl != null && group.avatarUrl!.isNotEmpty
                       ? ClipOval(
                           child: CachedImage(
                             url: group.avatarUrl!,
                             width: _cs(context, 52),
                             height: _cs(context, 52),
                             fit: BoxFit.cover,
-                            placeholderColor: const Color(0xFF00D9FF),
+                            placeholderColor: group.gradientColors.first,
                             errorWidget: Icon(
-                              Icons.group,
+                              Icons.people,
                               color: Colors.white,
                               size: _cs(context, 26),
                             ),
                           ),
                         )
                       : Icon(
-                          Icons.group,
+                          Icons.people,
                           color: Colors.white,
                           size: _cs(context, 26),
                         ),

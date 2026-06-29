@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/group.dart';
 import '../../models/lobby_user.dart';
 import '../../widgets/cached_image.dart';
 
@@ -25,6 +26,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     // title (avatar + member count) and group actions (call/doorbell/menu)
     // instead of the 1:1 user title. 1:1 chat passes none of these, so its
     // layout is unchanged.
+    this.groupId,
     this.groupName,
     this.groupAvatarUrl,
     this.memberCount,
@@ -52,6 +54,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onCallVideo;
 
   // --- Group mode ---
+  final int? groupId;
   final String? groupName;
   final String? groupAvatarUrl;
   final int? memberCount;
@@ -257,12 +260,20 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
   Widget _buildGroupAvatar() {
     final double radius = 17 * scale;
     final double imgDiameter = radius * 2;
-    const avatarColor = Color(0xFF7C3AED);
-    final fallback = Icon(Icons.group, color: Colors.white, size: 20 * scale);
+    final colors = Group.getGradientColors(groupId ?? 0);
+    final fallback = Icon(Icons.people, color: Colors.white, size: 20 * scale);
     final url = groupAvatarUrl;
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: avatarColor,
+    return Container(
+      width: imgDiameter,
+      height: imgDiameter,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: colors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        shape: BoxShape.circle,
+      ),
       child: (url != null && url.isNotEmpty)
           ? ClipOval(
               child: CachedImage(
@@ -270,7 +281,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                 width: imgDiameter,
                 height: imgDiameter,
                 fit: BoxFit.cover,
-                placeholderColor: avatarColor,
+                placeholderColor: colors.first,
                 errorWidget: fallback,
               ),
             )

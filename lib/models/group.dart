@@ -1,4 +1,5 @@
 /// Group model for group chats
+import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../config/api_config.dart';
 import '../services/storage_service.dart';
@@ -153,6 +154,22 @@ class Group {
     this.themeColor,
   });
 
+  static List<Color> getGradientColors(int groupId) {
+    const gradients = [
+      [Color(0xFF00C6FF), Color(0xFF0072FF)],
+      [Color(0xFFF857A6), Color(0xFFFF5858)],
+      [Color(0xFF11998E), Color(0xFF38EF7D)],
+      [Color(0xFF8E2DE2), Color(0xFF4A00E0)],
+      [Color(0xFFF39C12), Color(0xFFD35400)],
+      [Color(0xFF00B09B), Color(0xFF96C93D)],
+      [Color(0xFFFF416C), Color(0xFFFF4B2B)],
+      [Color(0xFF4776E6), Color(0xFF8E54E9)],
+    ];
+    return gradients[groupId % gradients.length];
+  }
+
+  List<Color> get gradientColors => getGradientColors(id);
+
   factory Group.fromJson(Map<String, dynamic> json) {
     try {
       // Try to extract my_role from the root level first
@@ -257,6 +274,9 @@ class GroupMemberUser {
   final String lastName;
   final String email;
   final String? avatarUrl;
+  final String status;
+  final bool isOnline;
+  final String? lastSeen;
 
   GroupMemberUser({
     required this.id,
@@ -265,18 +285,36 @@ class GroupMemberUser {
     required this.lastName,
     required this.email,
     this.avatarUrl,
+    this.status = 'offline',
+    this.isOnline = false,
+    this.lastSeen,
   });
 
   String get fullName => '$firstName $lastName'.trim();
 
+  String get initials {
+    final first = firstName.isNotEmpty ? firstName[0].toUpperCase() : '';
+    final last = lastName.isNotEmpty ? lastName[0].toUpperCase() : '';
+    return first.isNotEmpty || last.isNotEmpty ? (first + last) : (username.isNotEmpty ? username[0].toUpperCase() : '?');
+  }
+
+  int get avatarColorIndex {
+    return id % 10;
+  }
+
   factory GroupMemberUser.fromJson(Map<String, dynamic> json) {
+    final status = json['status'] as String? ?? 'offline';
+    final isOnline = json['is_online'] as bool? ?? (status == 'online');
     return GroupMemberUser(
       id: json['id'] as int,
       username: json['username'] as String,
-      firstName: json['first_name'] as String,
+      firstName: json['first_name'] as String? ?? '',
       lastName: json['last_name'] as String? ?? '',
-      email: json['email'] as String,
+      email: json['email'] as String? ?? '',
       avatarUrl: json['avatar_url'] as String?,
+      status: status,
+      isOnline: isOnline,
+      lastSeen: json['last_seen'] as String?,
     );
   }
 
@@ -288,6 +326,9 @@ class GroupMemberUser {
       'last_name': lastName,
       'email': email,
       'avatar_url': avatarUrl,
+      'status': status,
+      'is_online': isOnline,
+      'last_seen': lastSeen,
     };
   }
 }

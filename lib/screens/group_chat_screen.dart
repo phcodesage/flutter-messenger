@@ -2087,6 +2087,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         scale: 1.0,
         headerColor: _headerColor,
         onBack: () => Navigator.pop(context),
+        groupId: widget.group.id,
         groupName: _groupName,
         groupAvatarUrl: widget.group.avatarUrl,
         memberCount: _memberCount,
@@ -7061,57 +7062,118 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                 itemCount: members.length,
                                 itemBuilder: (_, i) {
                                   final m = members[i];
+                                  final user = m.user;
                                   final isSelf = m.userId == _currentUserId;
                                   final isAdmin = m.role == 'admin';
-                                  final name = m.user.fullName.isNotEmpty
-                                      ? m.user.fullName
-                                      : m.user.username;
+                                  final name = user.fullName.isNotEmpty
+                                      ? user.fullName
+                                      : user.username;
                                   return ListTile(
-                                    leading: CircleAvatar(
-                                      backgroundColor: _accent(),
-                                      child:
-                                          m.user.avatarUrl != null &&
-                                              m.user.avatarUrl!.isNotEmpty
-                                          ? ClipOval(
-                                              child: CachedImage(
-                                                url: m.user.avatarUrl!,
-                                                width: 40,
-                                                height: 40,
-                                                fit: BoxFit.cover,
-                                                placeholderColor: _accent(),
-                                                errorWidget: Text(
-                                                  name.isNotEmpty
-                                                      ? name[0].toUpperCase()
-                                                      : '?',
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
+                                    leading: SizedBox(
+                                      width: 44,
+                                      height: 44,
+                                      child: Stack(
+                                        children: [
+                                          CircleAvatar(
+                                            backgroundColor: _getAvatarColor(user.avatarColorIndex),
+                                            radius: 20,
+                                            child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
+                                                ? ClipOval(
+                                                    child: CachedImage(
+                                                      url: user.avatarUrl!,
+                                                      width: 40,
+                                                      height: 40,
+                                                      fit: BoxFit.cover,
+                                                      placeholderColor: _getAvatarColor(user.avatarColorIndex),
+                                                      errorWidget: Text(
+                                                        user.initials,
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  )
+                                                : Text(
+                                                    user.initials,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
                                                   ),
+                                          ),
+                                          Positioned(
+                                            right: 2,
+                                            bottom: 2,
+                                            child: Container(
+                                              width: 12,
+                                              height: 12,
+                                              decoration: BoxDecoration(
+                                                color: user.isOnline
+                                                    ? const Color(0xFF00E676)
+                                                    : (user.status == 'away'
+                                                        ? const Color(0xFFFFC107)
+                                                        : Colors.grey[600]!),
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: const Color(0xFF1E1E2E),
+                                                  width: 2,
                                                 ),
                                               ),
-                                            )
-                                          : Text(
-                                              name.isNotEmpty
-                                                  ? name[0].toUpperCase()
-                                                  : '?',
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                              ),
                                             ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                     title: Text(
                                       isSelf ? '$name (You)' : name,
                                       style: const TextStyle(
                                         color: Colors.white,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
-                                    subtitle: Text(
-                                      isAdmin ? 'Admin' : 'Member',
-                                      style: TextStyle(
-                                        color: isAdmin
-                                            ? _accent()
-                                            : Colors.grey[400],
-                                        fontSize: 12,
-                                      ),
+                                    subtitle: Row(
+                                      children: [
+                                        Text(
+                                          '@${user.username}',
+                                          style: TextStyle(color: Colors.grey[400]),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '•',
+                                          style: TextStyle(color: Colors.grey[500]),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            user.isOnline 
+                                                ? 'online' 
+                                                : _formatRelativeTime(user.lastSeen),
+                                            style: TextStyle(
+                                              color: user.isOnline ? const Color(0xFF00E676) : Colors.grey[400],
+                                              fontSize: 12,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (isAdmin) ...[
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF7C3AED).withAlpha(100),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: const Text(
+                                              'Admin',
+                                              style: TextStyle(
+                                                color: Color(0xFFD8B4FE),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                     trailing: (_currentUserIsAdmin && !isSelf)
                                         ? IconButton(

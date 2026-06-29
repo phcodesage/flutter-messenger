@@ -437,22 +437,36 @@ class _GroupsListScreenState extends State<GroupsListScreen> {
         // Refresh to update last message
         _loadGroups();
       },
-      leading: CircleAvatar(
-        radius: 28,
-        backgroundColor: const Color(0xFF8B5CF6),
-        backgroundImage: group.avatarUrl != null
-            ? NetworkImage(group.avatarUrl!)
-            : null,
-        child: group.avatarUrl == null
-            ? Text(
-                _getGroupInitials(group.name),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+      leading: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: group.gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          shape: BoxShape.circle,
+        ),
+        child: group.avatarUrl != null && group.avatarUrl!.isNotEmpty
+            ? ClipOval(
+                child: Image.network(
+                  group.avatarUrl!,
+                  width: 56,
+                  height: 56,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const Icon(
+                    Icons.people,
+                    color: Colors.white,
+                    size: 28,
+                  ),
                 ),
               )
-            : null,
+            : const Icon(
+                Icons.people,
+                color: Colors.white,
+                size: 28,
+              ),
       ),
       title: Row(
         children: [
