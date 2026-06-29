@@ -154,6 +154,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   String _typingMessage = '';
   Timer? _typingHideTimer;
   Timer? _typingEmitTimer;
+  Timer? _typingAutoStopTimer;
 
   @override
   void initState() {
@@ -865,6 +866,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           '📨 [GROUP NEW MESSAGE] Widget is mounted, updating messages list',
         );
         setState(() {
+          if (message.senderId != _currentUserId) {
+            _typingHideTimer?.cancel();
+            _typingUserName = '';
+            _typingMessage = '';
+          }
+
           final existingIndex = _messages.indexWhere((m) => m.id == message.id);
           if (existingIndex != -1) {
             _messages[existingIndex] = message;
@@ -1158,46 +1165,38 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final fullName = data['full_name'] as String?;
     final message = data['message'] as String? ?? '';
 
-    debugPrint(
-      '⌨️ [GROUP TYPING HANDLER] userId: $userId, currentUserId: $_currentUserId',
-    );
-    debugPrint(
-      '⌨️ [GROUP TYPING HANDLER] username: $username, fullName: $fullName',
-    );
-    debugPrint('⌨️ [GROUP TYPING HANDLER] message: "$message"');
-
     // Don't show typing indicator for own messages
     if (userId == _currentUserId) {
-      debugPrint('⌨️ [GROUP TYPING HANDLER] Ignoring own typing indicator');
       return;
     }
 
     final displayName = fullName ?? username ?? 'Someone';
-    debugPrint('⌨️ [GROUP TYPING HANDLER] Display name: $displayName');
 
     // Cancel previous hide timer
     _typingHideTimer?.cancel();
 
     if (mounted) {
-      setState(() {
-        _typingUserName = displayName;
-        _typingMessage = message;
-      });
+      if (message.trim().isEmpty) {
+        setState(() {
+          _typingUserName = '';
+          _typingMessage = '';
+        });
+      } else {
+        setState(() {
+          _typingUserName = displayName;
+          _typingMessage = message;
+        });
 
-      debugPrint(
-        '⌨️ [GROUP TYPING HANDLER] Updated UI - typingUserName: $_typingUserName, typingMessage: $_typingMessage',
-      );
-
-      // Auto-hide after 3 seconds
-      _typingHideTimer = Timer(const Duration(seconds: 3), () {
-        if (mounted) {
-          debugPrint('⌨️ [GROUP TYPING HANDLER] Auto-hiding typing indicator');
-          setState(() {
-            _typingUserName = '';
-            _typingMessage = '';
-          });
-        }
-      });
+        // Auto-hide after 6 seconds in case stop event is missed
+        _typingHideTimer = Timer(const Duration(seconds: 6), () {
+          if (mounted) {
+            setState(() {
+              _typingUserName = '';
+              _typingMessage = '';
+            });
+          }
+        });
+      }
     }
   }
 
@@ -1577,8 +1576,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Stop group typing indicator
   void _stopGroupTyping() {
-    // Cancel any pending typing emit timer
+    // Cancel any pending typing emit timer and auto-stop timer
     _typingEmitTimer?.cancel();
+    _typingAutoStopTimer?.cancel();
 
     // Send empty message to stop typing indicator
     _socketService.stopGroupTyping(widget.group.id);
@@ -2056,6 +2056,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _inputScrollController.dispose();
     _typingHideTimer?.cancel();
     _typingEmitTimer?.cancel();
+    _typingAutoStopTimer?.cancel();
     _taskModalVersion.dispose();
     for (final r in _linkRecognizers) {
       r.dispose();
@@ -8256,9 +8257,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       _replaceInputTextWithSanitized(normalizedText);
       return;
     }
+    if (text.isEmpty) {
+      _stopGroupTyping();
+      return;
+    }
     _typingEmitTimer?.cancel();
     _typingEmitTimer = Timer(const Duration(milliseconds: 150), () {
       _socketService.sendGroupTyping(widget.group.id, text);
+    });
+
+    _typingAutoStopTimer?.cancel();
+    _typingAutoStopTimer = Timer(const Duration(seconds: 3), () {
+      _stopGroupTyping();
     });
   }
 
