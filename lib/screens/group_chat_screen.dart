@@ -130,7 +130,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // File upload state for preview modal
   bool _isActivelyUploading = false;
-  final ValueNotifier<double> _activeUploadProgressNotifier = ValueNotifier<double>(0.0);
+  final ValueNotifier<double> _activeUploadProgressNotifier =
+      ValueNotifier<double>(0.0);
   File? _pendingFile;
   String? _pendingFileName;
   String? _pendingFileMimeType;
@@ -217,8 +218,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       final phrases = await _commonPhrasesApi.fetch(limit: 8);
       final pinnedOnly = phrases.where((p) => p.isPinnedMobile).toList()
         ..sort(
-          (a, b) =>
-              (a.pinOrderMobile ?? 99).compareTo(b.pinOrderMobile ?? 99),
+          (a, b) => (a.pinOrderMobile ?? 99).compareTo(b.pinOrderMobile ?? 99),
         );
       if (mounted) {
         setState(() {
@@ -275,16 +275,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       final msg = messages[i];
       if (msg.messageType == 'system' &&
           (msg.content.contains('Changed background color') ||
-           msg.content.contains('Reset background color') ||
-           msg.content.contains('changed the group chat color') ||
-           msg.content.contains('reset the group chat color'))) {
+              msg.content.contains('Reset background color') ||
+              msg.content.contains('changed the group chat color') ||
+              msg.content.contains('reset the group chat color'))) {
         latestColorMsg = msg;
         break;
       }
     }
 
     if (latestColorMsg != null) {
-      final isResetMsg = latestColorMsg.content.contains('Reset') ||
+      final isResetMsg =
+          latestColorMsg.content.contains('Reset') ||
           latestColorMsg.content.contains('reset');
       if (isResetMsg) {
         // Unconditionally reset to default color
@@ -633,7 +634,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _socketService.addListener('groupDeleted', key, (data) {
       if (_eventGroupId(data) != widget.group.id) return;
       if (!mounted) return;
-      
+
       final currentUserId = _socketService.currentUserId;
       final deletedById = data['deleted_by_id'] as int?;
       if (deletedById == null || deletedById != currentUserId) {
@@ -759,9 +760,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         // The current user was removed by an admin — exit the chat.
         if (mounted) {
           _showTopSnackBar(
-            const SnackBar(
-              content: Text('You were removed from this group'),
-            ),
+            const SnackBar(content: Text('You were removed from this group')),
           );
           Navigator.of(context).pop();
         }
@@ -772,7 +771,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         setState(() => _memberCount = group['member_count'] as int);
       }
       final name = (data['removed_user_name'] as String?)?.trim();
-      _appendSystemMessage('${name?.isNotEmpty == true ? name : 'A member'} left the group');
+      _appendSystemMessage(
+        '${name?.isNotEmpty == true ? name : 'A member'} left the group',
+      );
     } else {
       // group_member_left (not carried with a group payload)
       final name = (data['user_name'] as String?)?.trim();
@@ -1204,7 +1205,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final isFromSelf = senderId == _currentUserId;
     final timestampMs = data['timestamp_ms'] != null
         ? int.tryParse(data['timestamp_ms'].toString()) ??
-            DateTime.now().millisecondsSinceEpoch
+              DateTime.now().millisecondsSinceEpoch
         : DateTime.now().millisecondsSinceEpoch;
 
     if (colorHex != null) {
@@ -1280,7 +1281,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final isFromSelf = senderId == _currentUserId;
     final timestampMs = data['timestamp_ms'] != null
         ? int.tryParse(data['timestamp_ms'].toString()) ??
-            DateTime.now().millisecondsSinceEpoch
+              DateTime.now().millisecondsSinceEpoch
         : DateTime.now().millisecondsSinceEpoch;
 
     // Always apply color reset (incoming or cross-device sync)
@@ -1529,17 +1530,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   void _scrollEntryToBottom() {
-    if (!_scrollController.hasClients) return;
     _userHasScrolledManually = false;
-    
-    // Jump immediately
-    _scrollToBottom(animate: false);
-    
+
+    // Use addPostFrameCallback so the ListView is guaranteed to be built
+    // before we attempt to scroll — the controller has no clients yet when
+    // this is called synchronously right after setState.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      _scrollToBottom(animate: false);
+    });
+
     // Schedule a series of checks/jumps as items/files load and build
     final delays = [50, 150, 300, 600, 1000, 1500];
     for (final delay in delays) {
       Future.delayed(Duration(milliseconds: delay), () {
-        if (!mounted || !_scrollController.hasClients || _userHasScrolledManually) return;
+        if (!mounted ||
+            !_scrollController.hasClients ||
+            _userHasScrolledManually)
+          return;
         _scrollToBottom(animate: false);
       });
     }
@@ -2118,13 +2126,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                             itemCount: _messages.length,
                             itemBuilder: (context, index) {
                               final message = _messages[index];
-                              final isSentByMe = message.senderId == _currentUserId;
+                              final isSentByMe =
+                                  message.senderId == _currentUserId;
 
                               // Date separator between days
                               Widget? dateSeparator;
                               if (index < _messages.length - 1) {
                                 final next = _messages[index + 1];
-                                if (!_isSameDay(message.timestamp, next.timestamp)) {
+                                if (!_isSameDay(
+                                  message.timestamp,
+                                  next.timestamp,
+                                )) {
                                   dateSeparator = ChatDateSeparator(
                                     timestamp: message.timestamp,
                                     scale: 1.0,
@@ -2137,12 +2149,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                 );
                               }
 
-                              final bubble = message.isDeleted || message.messageType == 'system'
+                              final bubble =
+                                  message.isDeleted ||
+                                      message.messageType == 'system'
                                   ? _buildMessageBubble(message)
                                   : SwipeableMessage(
                                       isSentByMe: isSentByMe,
                                       onReply: () {
-                                        setState(() => _replyingToMessage = message);
+                                        setState(
+                                          () => _replyingToMessage = message,
+                                        );
                                         _inputFocusNode.requestFocus();
                                       },
                                       child: _buildSharedGroupBubble(
@@ -2552,8 +2568,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // Handle system messages (doorbell notifications from others, etc.)
     if (message.messageType == 'system') {
       String displayContent = message.content;
-      final isFromCreator = message.senderId == _currentUserId || widget.group.createdBy == _currentUserId;
-      if (isFromCreator && (displayContent.contains('created the group') || displayContent.contains('created this group') || displayContent == 'You created this group')) {
+      final isFromCreator =
+          message.senderId == _currentUserId ||
+          widget.group.createdBy == _currentUserId;
+      if (isFromCreator &&
+          (displayContent.contains('created the group') ||
+              displayContent.contains('created this group') ||
+              displayContent == 'You created this group')) {
         displayContent = 'You created this group';
       }
       return Center(
@@ -4833,7 +4854,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final myPeerId = myUserId.toString();
 
     // Generate a unique room ID for this group call
-    final roomId = 'group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}';
+    final roomId =
+        'group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}';
 
     // Fetch member list for invitations
     List<int> memberIds = [];
@@ -5068,7 +5090,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       }
     } else {
       final existing = _messages[idx];
-      final isExcalPinned = data['is_excalidraw_link'] == true || data['excalidraw_pinned_at'] != null;
+      final isExcalPinned =
+          data['is_excalidraw_link'] == true ||
+          data['excalidraw_pinned_at'] != null;
       final isTaskCompleted = data['task_completed_at'] != null;
       final isTask = data['is_task'] == true;
       final updated = existing.copyWith(
@@ -5344,12 +5368,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         return ValueListenableBuilder<int>(
           valueListenable: _taskModalVersion,
           builder: (context, _, child) {
-            final allTasks =
-                _messages.where((m) => m.isTask && !m.isDeleted).toList();
-            final pendingTasks =
-                allTasks.where((t) => t.taskCompletedAt == null).toList();
-            final completedTasks =
-                allTasks.where((t) => t.taskCompletedAt != null).toList();
+            final allTasks = _messages
+                .where((m) => m.isTask && !m.isDeleted)
+                .toList();
+            final pendingTasks = allTasks
+                .where((t) => t.taskCompletedAt == null)
+                .toList();
+            final completedTasks = allTasks
+                .where((t) => t.taskCompletedAt != null)
+                .toList();
             return Padding(
               padding: EdgeInsets.fromLTRB(10, topOffset, 10, 10),
               child: Align(
@@ -5522,8 +5549,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                   builder: (context, setModalState) {
                                     final displayTasks =
                                         _taskFilter == 'pending'
-                                            ? pendingTasks
-                                            : completedTasks;
+                                        ? pendingTasks
+                                        : completedTasks;
                                     final otherText = _taskFilter == 'pending'
                                         ? 'Completed'
                                         : 'Pending';
@@ -5576,8 +5603,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                   setModalState(() {
                                                     _taskFilter =
                                                         _taskFilter == 'pending'
-                                                            ? 'completed'
-                                                            : 'pending';
+                                                        ? 'completed'
+                                                        : 'pending';
                                                   });
                                                 },
                                                 child: Container(
@@ -5610,22 +5637,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                         _taskFilter == 'pending'
                                                             ? Icons.check_circle
                                                             : Icons
-                                                                .circle_outlined,
+                                                                  .circle_outlined,
                                                         color:
                                                             _taskFilter ==
-                                                                    'pending'
-                                                                ? const Color(
-                                                                    0xFF22C55E,
-                                                                  )
-                                                                : Colors.grey[600],
+                                                                'pending'
+                                                            ? const Color(
+                                                                0xFF22C55E,
+                                                              )
+                                                            : Colors.grey[600],
                                                         size: 12,
                                                       ),
                                                       const SizedBox(width: 5),
                                                       Text(
                                                         otherText,
                                                         style: TextStyle(
-                                                          color: Colors
-                                                              .grey[300],
+                                                          color:
+                                                              Colors.grey[300],
                                                           fontSize: 10,
                                                           fontWeight:
                                                               FontWeight.w600,
@@ -5717,8 +5744,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   void _showGroupTaskDetail(GroupMessage task, bool isCompleted) {
     final isSentByMe = task.senderId == _currentUserId;
-    final senderLabel =
-        isSentByMe ? 'You' : (task.sender?.fullName ?? 'Member');
+    final senderLabel = isSentByMe
+        ? 'You'
+        : (task.sender?.fullName ?? 'Member');
 
     showModalBottomSheet(
       context: context,
@@ -5955,11 +5983,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final bool isImageTask =
         task.messageType == 'image' ||
         (task.fileType?.startsWith('image/') ?? false);
-    final String? thumbUrl =
-        (task.fileUrl != null && task.fileUrl!.isNotEmpty)
+    final String? thumbUrl = (task.fileUrl != null && task.fileUrl!.isNotEmpty)
         ? (task.fileUrl!.startsWith('http')
-            ? task.fileUrl!
-            : '${ApiConfig.baseUrl}${task.fileUrl!}')
+              ? task.fileUrl!
+              : '${ApiConfig.baseUrl}${task.fileUrl!}')
         : null;
     final bool showThumb = isImageTask && thumbUrl != null;
     final String contentLabel = task.content.isNotEmpty
@@ -6225,10 +6252,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         return ValueListenableBuilder<int>(
           valueListenable: _taskModalVersion,
           builder: (context, _, child) {
-            final pinned = _messages
-                .where((m) => m.excalidrawPinnedAt != null && !m.isDeleted)
-                .toList()
-              ..sort((a, b) => b.timestampMs.compareTo(a.timestampMs));
+            final pinned =
+                _messages
+                    .where((m) => m.excalidrawPinnedAt != null && !m.isDeleted)
+                    .toList()
+                  ..sort((a, b) => b.timestampMs.compareTo(a.timestampMs));
 
             return Padding(
               padding: EdgeInsets.fromLTRB(10, topOffset, 10, 10),
@@ -6278,7 +6306,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     color: Colors.white.withValues(alpha: 0.2),
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: Colors.white.withValues(alpha: 0.5),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.5,
+                                      ),
                                     ),
                                   ),
                                   child: const Icon(
@@ -6308,7 +6338,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     color: Colors.white.withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(999),
                                     border: Border.all(
-                                      color: Colors.white.withValues(alpha: 0.5),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.5,
+                                      ),
                                     ),
                                   ),
                                   child: Text(
@@ -6327,7 +6359,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     width: 30,
                                     height: 30,
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.08),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.08,
+                                      ),
                                       shape: BoxShape.circle,
                                     ),
                                     child: const Icon(
@@ -6398,14 +6432,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       final m = pinned[index];
                                       final content = m.content;
                                       final orderNumber = index + 1;
-                                      final rawTitle = (m.excalidrawTitle != null && m.excalidrawTitle!.trim().isNotEmpty)
+                                      final rawTitle =
+                                          (m.excalidrawTitle != null &&
+                                              m.excalidrawTitle!
+                                                  .trim()
+                                                  .isNotEmpty)
                                           ? m.excalidrawTitle!.trim()
                                           : '';
                                       final cardTitle = rawTitle.isNotEmpty
                                           ? rawTitle
                                           : 'Link #$orderNumber';
-                                      final extractedUrl = _extractExcalidrawUrl(content);
-                                      final displayText = (extractedUrl ?? content).trim().isEmpty
+                                      final extractedUrl =
+                                          _extractExcalidrawUrl(content);
+                                      final displayText =
+                                          (extractedUrl ?? content)
+                                              .trim()
+                                              .isEmpty
                                           ? 'Excalidraw link'
                                           : (extractedUrl ?? content).trim();
                                       final openLink = () {
@@ -6415,10 +6457,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                         }
                                       };
                                       return Container(
-                                        margin: const EdgeInsets.only(bottom: 10),
+                                        margin: const EdgeInsets.only(
+                                          bottom: 10,
+                                        ),
                                         decoration: BoxDecoration(
                                           color: const Color(0xFF252542),
-                                          borderRadius: BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
                                           border: Border.all(
                                             color: const Color(
                                               0xFFF97316,
@@ -6445,7 +6491,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                       style: const TextStyle(
                                                         color: Colors.white,
                                                         fontSize: 15,
-                                                        fontWeight: FontWeight.w700,
+                                                        fontWeight:
+                                                            FontWeight.w700,
                                                       ),
                                                     ),
                                                   ),
@@ -6460,8 +6507,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                     color: Color(0xFF93C5FD),
                                                     fontSize: 14,
                                                     height: 1.4,
-                                                    decoration:
-                                                        TextDecoration.underline,
+                                                    decoration: TextDecoration
+                                                        .underline,
                                                     decorationColor: Color(
                                                       0xFF93C5FD,
                                                     ),
@@ -6470,7 +6517,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                               ),
                                               const SizedBox(height: 8),
                                               Text(
-                                                _formatPinnedAt(m.excalidrawPinnedAt),
+                                                _formatPinnedAt(
+                                                  m.excalidrawPinnedAt,
+                                                ),
                                                 style: const TextStyle(
                                                   color: Color(0xFFFBBF24),
                                                   fontSize: 13,
@@ -6485,7 +6534,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                     child: InkWell(
                                                       onTap: openLink,
                                                       borderRadius:
-                                                          BorderRadius.circular(8),
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
                                                       child: Container(
                                                         padding:
                                                             const EdgeInsets.symmetric(
@@ -6507,17 +6558,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                           children: [
                                                             Icon(
                                                               Icons.open_in_new,
-                                                              color: Colors.white,
+                                                              color:
+                                                                  Colors.white,
                                                               size: 16,
                                                             ),
                                                             SizedBox(width: 6),
                                                             Text(
                                                               'Open',
                                                               style: TextStyle(
-                                                                color: Colors.white,
+                                                                color: Colors
+                                                                    .white,
                                                                 fontSize: 14,
                                                                 fontWeight:
-                                                                    FontWeight.w600,
+                                                                    FontWeight
+                                                                        .w600,
                                                               ),
                                                             ),
                                                           ],
@@ -6529,10 +6583,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                   Expanded(
                                                     child: InkWell(
                                                       onTap: () async {
-                                                        await _toggleGroupExcalidrawPin(m);
+                                                        await _toggleGroupExcalidrawPin(
+                                                          m,
+                                                        );
                                                       },
                                                       borderRadius:
-                                                          BorderRadius.circular(8),
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
                                                       child: Container(
                                                         padding:
                                                             const EdgeInsets.symmetric(
@@ -6555,17 +6613,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                             Icon(
                                                               Icons
                                                                   .push_pin_outlined,
-                                                              color: Colors.white,
+                                                              color:
+                                                                  Colors.white,
                                                               size: 16,
                                                             ),
                                                             SizedBox(width: 6),
                                                             Text(
                                                               'Unpin',
                                                               style: TextStyle(
-                                                                color: Colors.white,
+                                                                color: Colors
+                                                                    .white,
                                                                 fontSize: 14,
                                                                 fontWeight:
-                                                                    FontWeight.w600,
+                                                                    FontWeight
+                                                                        .w600,
                                                               ),
                                                             ),
                                                           ],
@@ -6889,9 +6950,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(dctx, true),
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.red,
-                      ),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
                       child: const Text('Remove'),
                     ),
                   ],
@@ -6993,7 +7052,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                   return ListTile(
                                     leading: CircleAvatar(
                                       backgroundColor: _accent(),
-                                      child: m.user.avatarUrl != null && m.user.avatarUrl!.isNotEmpty
+                                      child:
+                                          m.user.avatarUrl != null &&
+                                              m.user.avatarUrl!.isNotEmpty
                                           ? ClipOval(
                                               child: CachedImage(
                                                 url: m.user.avatarUrl!,
@@ -7002,14 +7063,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                 fit: BoxFit.cover,
                                                 placeholderColor: _accent(),
                                                 errorWidget: Text(
-                                                  name.isNotEmpty ? name[0].toUpperCase() : '?',
-                                                  style: const TextStyle(color: Colors.white),
+                                                  name.isNotEmpty
+                                                      ? name[0].toUpperCase()
+                                                      : '?',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                  ),
                                                 ),
                                               ),
                                             )
                                           : Text(
-                                              name.isNotEmpty ? name[0].toUpperCase() : '?',
-                                              style: const TextStyle(color: Colors.white),
+                                              name.isNotEmpty
+                                                  ? name[0].toUpperCase()
+                                                  : '?',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                              ),
                                             ),
                                     ),
                                     title: Text(
@@ -7027,8 +7096,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                         fontSize: 12,
                                       ),
                                     ),
-                                    trailing:
-                                        (_currentUserIsAdmin && !isSelf)
+                                    trailing: (_currentUserIsAdmin && !isSelf)
                                         ? IconButton(
                                             icon: const Icon(
                                               Icons.remove_circle_outline,
@@ -7215,25 +7283,39 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     child: Stack(
                                       children: [
                                         CircleAvatar(
-                                          backgroundColor: _getAvatarColor(u.avatarColorIndex),
+                                          backgroundColor: _getAvatarColor(
+                                            u.avatarColorIndex,
+                                          ),
                                           radius: 20,
-                                          child: u.avatarUrl != null && u.avatarUrl!.isNotEmpty
+                                          child:
+                                              u.avatarUrl != null &&
+                                                  u.avatarUrl!.isNotEmpty
                                               ? ClipOval(
                                                   child: CachedImage(
                                                     url: u.avatarUrl!,
                                                     width: 40,
                                                     height: 40,
                                                     fit: BoxFit.cover,
-                                                    placeholderColor: _getAvatarColor(u.avatarColorIndex),
+                                                    placeholderColor:
+                                                        _getAvatarColor(
+                                                          u.avatarColorIndex,
+                                                        ),
                                                     errorWidget: Text(
                                                       u.initials,
-                                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
                                                     ),
                                                   ),
                                                 )
                                               : Text(
                                                   u.initials,
-                                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                         ),
                                         Positioned(
@@ -7246,8 +7328,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                               color: u.isOnline
                                                   ? const Color(0xFF00E676)
                                                   : (u.status == 'away'
-                                                      ? const Color(0xFFFFC107)
-                                                      : Colors.grey[600]!),
+                                                        ? const Color(
+                                                            0xFFFFC107,
+                                                          )
+                                                        : Colors.grey[600]!),
                                               shape: BoxShape.circle,
                                               border: Border.all(
                                                 color: const Color(0xFF1E1E2E),
@@ -7267,21 +7351,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     children: [
                                       Text(
                                         '@${u.username}',
-                                        style: TextStyle(color: Colors.grey[400]),
+                                        style: TextStyle(
+                                          color: Colors.grey[400],
+                                        ),
                                       ),
                                       const SizedBox(width: 8),
                                       Text(
                                         '•',
-                                        style: TextStyle(color: Colors.grey[500]),
+                                        style: TextStyle(
+                                          color: Colors.grey[500],
+                                        ),
                                       ),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          u.isOnline 
-                                              ? 'online' 
+                                          u.isOnline
+                                              ? 'online'
                                               : _formatRelativeTime(u.lastSeen),
                                           style: TextStyle(
-                                            color: u.isOnline ? const Color(0xFF00E676) : Colors.grey[400],
+                                            color: u.isOnline
+                                                ? const Color(0xFF00E676)
+                                                : Colors.grey[400],
                                             fontSize: 12,
                                           ),
                                           overflow: TextOverflow.ellipsis,
@@ -7415,8 +7505,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       final details = await GroupService.getGroupDetails(
                         widget.group.id,
                       );
-                      final existing =
-                          (details['members'] as List).cast<GroupMember>();
+                      final existing = (details['members'] as List)
+                          .cast<GroupMember>();
                       await _showAddMembersSheet(
                         existing.map((m) => m.userId).toSet(),
                       );
@@ -7614,10 +7704,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             onPressed: () => Navigator.pop(dctx, false),
             style: TextButton.styleFrom(
               foregroundColor: Colors.white70,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 10,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
             child: const Text('Cancel', style: TextStyle(fontSize: 15)),
           ),
@@ -7627,10 +7714,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               backgroundColor: const Color(0xFF4C1D95),
               foregroundColor: Colors.white,
               elevation: 2,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 10,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -8097,7 +8181,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (confirmed != true) return;
 
     try {
-      final deletedCount = await GroupService.deleteAllMessages(widget.group.id);
+      final deletedCount = await GroupService.deleteAllMessages(
+        widget.group.id,
+      );
 
       // Clear locally as well — the server also emits `all_messages_deleted`
       // to every member, but socket delivery is not guaranteed.
@@ -8272,8 +8358,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final int end = sel.isValid ? sel.end : text.length;
     final before = text.substring(0, start);
     final after = text.substring(end);
-    final spaceBefore =
-        (before.isEmpty || RegExp(r'\s$').hasMatch(before)) ? '' : ' ';
+    final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
+        ? ''
+        : ' ';
     final bool inputIsEmpty = before.isEmpty && after.isEmpty;
     final spaceAfter = inputIsEmpty
         ? ' '
