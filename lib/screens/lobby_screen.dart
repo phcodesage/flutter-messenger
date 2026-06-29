@@ -783,12 +783,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
             _groups.removeWhere((g) => g.id == groupId);
           });
           _filterUsers();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Group deleted: ${groupName ?? 'Unknown'}'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          
+          final currentUserId = _socketService.currentUserId;
+          final deletedById = data['deleted_by_id'] as int?;
+          if (deletedById == null || deletedById != currentUserId) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Group deleted: ${groupName ?? 'Unknown'}'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
         }
       }
     });

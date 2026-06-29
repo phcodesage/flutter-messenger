@@ -84,6 +84,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   // Scroll to bottom button state
   bool _isAtBottom = true;
   int _unreadCount = 0;
+  bool _userHasScrolledManually = false;
 
   // Reply state
   GroupMessage? _replyingToMessage;
@@ -270,12 +271,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         _messages = cached;
         _isLoading = false;
       });
-      // Jump to bottom on the next frame, same as the network path does.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
+      // Jump to bottom and schedule checks as dynamic items/files render.
+      _scrollEntryToBottom();
     } catch (e) {
       debugPrint('Error loading cached group messages: $e');
     }
@@ -292,6 +289,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _showEmojiPicker = false;
         }
       });
+      if (isVisible && _isAtBottom) {
+        _scrollToBottomWithRetry();
+      }
     }
   }
 
@@ -541,17 +541,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _socketService.addListener('groupDeleted', key, (data) {
       if (_eventGroupId(data) != widget.group.id) return;
       if (!mounted) return;
-      final by = (data['deleted_by'] as String?)?.trim();
-      _showTopSnackBar(
-        SnackBar(
-          content: Text(
-            by != null && by.isNotEmpty
-                ? 'This group was disbanded by $by'
-                : 'This group was disbanded',
+      
+      final currentUserId = _socketService.currentUserId;
+      final deletedById = data['deleted_by_id'] as int?;
+      if (deletedById == null || deletedById != currentUserId) {
+        final by = (data['deleted_by'] as String?)?.trim();
+        _showTopSnackBar(
+          SnackBar(
+            content: Text(
+              by != null && by.isNotEmpty
+                  ? 'This group was disbanded by $by'
+                  : 'This group was disbanded',
+            ),
+            backgroundColor: Colors.orange,
           ),
-          backgroundColor: Colors.orange,
-        ),
-      );
+        );
+      }
       Navigator.of(context).pop();
     });
 
@@ -727,17 +732,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         // Mark messages as viewed
         _markMessagesAsViewed();
 
-        // Scroll to bottom only when this is the first paint (cold open).
-        // Don't yank the scroll position from under the user on a warm
-        // refresh.
-        if (!hasCachedMessages) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (_scrollController.hasClients) {
-              _scrollController.jumpTo(
-                _scrollController.position.maxScrollExtent,
-              );
-            }
-          });
+        // Scroll to bottom if this is the first paint (cold open) or if the user has not manually scrolled yet.
+        // Don't yank the scroll position from under the user on a warm refresh if they scrolled up.
+        if (!hasCachedMessages || !_userHasScrolledManually) {
+          _scrollEntryToBottom();
         }
       }
     } catch (e) {
@@ -837,17 +835,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _markMessagesAsViewed();
         }
 
-        // Only auto-scroll if user is at bottom, otherwise just show unread badge
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients && _isAtBottom) {
-            debugPrint('📨 [GROUP NEW MESSAGE] Scrolling to bottom');
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-          }
-        });
+        // Only auto-scroll if user is at bottom or message is from current user
+        if (_isAtBottom || message.senderId == _currentUserId) {
+          debugPrint('📨 [GROUP NEW MESSAGE] Scrolling to bottom');
+          _scrollToBottomWithRetry();
+        }
       } else {
         debugPrint(
           '📨 [GROUP NEW MESSAGE] Widget not mounted, ignoring message',
@@ -1408,15 +1400,51 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  /// Scroll to bottom and mark all messages as read
-  Future<void> _scrollToBottomAndMarkRead() async {
-    if (_scrollController.hasClients) {
+  void _scrollToBottom({bool animate = true}) {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    if (animate) {
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        maxScroll,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+    } else {
+      _scrollController.jumpTo(maxScroll);
     }
+  }
+
+  void _scrollToBottomWithRetry({bool animate = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom(animate: animate);
+    });
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (mounted) {
+        _scrollToBottom(animate: animate);
+      }
+    });
+  }
+
+  void _scrollEntryToBottom() {
+    if (!_scrollController.hasClients) return;
+    _userHasScrolledManually = false;
+    
+    // Jump immediately
+    _scrollToBottom(animate: false);
+    
+    // Schedule a series of checks/jumps as items/files load and build
+    final delays = [50, 150, 300, 600, 1000, 1500];
+    for (final delay in delays) {
+      Future.delayed(Duration(milliseconds: delay), () {
+        if (!mounted || !_scrollController.hasClients || _userHasScrolledManually) return;
+        _scrollToBottom(animate: false);
+      });
+    }
+  }
+
+  /// Scroll to bottom and mark all messages as read
+  Future<void> _scrollToBottomAndMarkRead() async {
+    _scrollToBottomWithRetry();
 
     // Reset unread count
     setState(() {
@@ -1473,15 +1501,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
 
     // Scroll to bottom after adding optimistic message
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+    _scrollToBottomWithRetry();
 
     try {
       // Send message via API (this will trigger groupMessageSent event)
@@ -1807,15 +1827,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       setState(() {
         _messages.add(optimisticMessage);
       });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+      _scrollToBottomWithRetry();
     }
 
     try {
@@ -1986,56 +1998,65 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     )
                   : Stack(
                       children: [
-                        ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.all(16),
-                          cacheExtent: 500,
-                          addAutomaticKeepAlives: false,
-                          addRepaintBoundaries: true,
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            final message = _messages[index];
-                            final isSentByMe = message.senderId == _currentUserId;
+                        NotificationListener<ScrollNotification>(
+                          onNotification: (notification) {
+                            if (notification is ScrollStartNotification &&
+                                notification.dragDetails != null) {
+                              _userHasScrolledManually = true;
+                            }
+                            return false;
+                          },
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.all(16),
+                            cacheExtent: 500,
+                            addAutomaticKeepAlives: false,
+                            addRepaintBoundaries: true,
+                            itemCount: _messages.length,
+                            itemBuilder: (context, index) {
+                              final message = _messages[index];
+                              final isSentByMe = message.senderId == _currentUserId;
 
-                            // Date separator between days
-                            Widget? dateSeparator;
-                            if (index < _messages.length - 1) {
-                              final next = _messages[index + 1];
-                              if (!_isSameDay(message.timestamp, next.timestamp)) {
+                              // Date separator between days
+                              Widget? dateSeparator;
+                              if (index < _messages.length - 1) {
+                                final next = _messages[index + 1];
+                                if (!_isSameDay(message.timestamp, next.timestamp)) {
+                                  dateSeparator = ChatDateSeparator(
+                                    timestamp: message.timestamp,
+                                    scale: 1.0,
+                                  );
+                                }
+                              } else {
                                 dateSeparator = ChatDateSeparator(
                                   timestamp: message.timestamp,
                                   scale: 1.0,
                                 );
                               }
-                            } else {
-                              dateSeparator = ChatDateSeparator(
-                                timestamp: message.timestamp,
-                                scale: 1.0,
+
+                              final bubble = message.isDeleted || message.messageType == 'system'
+                                  ? _buildMessageBubble(message)
+                                  : SwipeableMessage(
+                                      isSentByMe: isSentByMe,
+                                      onReply: () {
+                                        setState(() => _replyingToMessage = message);
+                                        _inputFocusNode.requestFocus();
+                                      },
+                                      child: _buildSharedGroupBubble(
+                                        message,
+                                        isSentByMe,
+                                        reactionsForUi,
+                                      ),
+                                    );
+
+                              return Column(
+                                children: [
+                                  bubble,
+                                  if (dateSeparator != null) dateSeparator,
+                                ],
                               );
-                            }
-
-                            final bubble = message.isDeleted || message.messageType == 'system'
-                                ? _buildMessageBubble(message)
-                                : SwipeableMessage(
-                                    isSentByMe: isSentByMe,
-                                    onReply: () {
-                                      setState(() => _replyingToMessage = message);
-                                      _inputFocusNode.requestFocus();
-                                    },
-                                    child: _buildSharedGroupBubble(
-                                      message,
-                                      isSentByMe,
-                                      reactionsForUi,
-                                    ),
-                                  );
-
-                            return Column(
-                              children: [
-                                bubble,
-                                if (dateSeparator != null) dateSeparator,
-                              ],
-                            );
-                          },
+                            },
+                          ),
                         ),
                         // Scroll to bottom button - positioned inside messages area
                         if (!_isAtBottom)
@@ -6867,14 +6888,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                   return ListTile(
                                     leading: CircleAvatar(
                                       backgroundColor: _accent(),
-                                      child: Text(
-                                        name.isNotEmpty
-                                            ? name[0].toUpperCase()
-                                            : '?',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                        ),
-                                      ),
+                                      child: m.user.avatarUrl != null && m.user.avatarUrl!.isNotEmpty
+                                          ? ClipOval(
+                                              child: CachedImage(
+                                                url: m.user.avatarUrl!,
+                                                width: 40,
+                                                height: 40,
+                                                fit: BoxFit.cover,
+                                                placeholderColor: _accent(),
+                                                errorWidget: Text(
+                                                  name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                                  style: const TextStyle(color: Colors.white),
+                                                ),
+                                              ),
+                                            )
+                                          : Text(
+                                              name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                              style: const TextStyle(color: Colors.white),
+                                            ),
                                     ),
                                     title: Text(
                                       isSelf ? '$name (You)' : name,
@@ -7073,16 +7104,85 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       selected.remove(u.id);
                                     }
                                   }),
+                                  secondary: SizedBox(
+                                    width: 44,
+                                    height: 44,
+                                    child: Stack(
+                                      children: [
+                                        CircleAvatar(
+                                          backgroundColor: _accent(),
+                                          radius: 20,
+                                          child: u.avatarUrl != null && u.avatarUrl!.isNotEmpty
+                                              ? ClipOval(
+                                                  child: CachedImage(
+                                                    url: u.avatarUrl!,
+                                                    width: 40,
+                                                    height: 40,
+                                                    fit: BoxFit.cover,
+                                                    placeholderColor: _accent(),
+                                                    errorWidget: Text(
+                                                      u.initials,
+                                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                    ),
+                                                  ),
+                                                )
+                                              : Text(
+                                                  u.initials,
+                                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                                ),
+                                        ),
+                                        Positioned(
+                                          right: 2,
+                                          bottom: 2,
+                                          child: Container(
+                                            width: 12,
+                                            height: 12,
+                                            decoration: BoxDecoration(
+                                              color: u.isOnline
+                                                  ? const Color(0xFF00E676)
+                                                  : (u.status == 'away'
+                                                      ? const Color(0xFFFFC107)
+                                                      : Colors.grey[600]!),
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: const Color(0xFF1E1E2E),
+                                                width: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                   title: Text(
                                     name,
                                     style: const TextStyle(color: Colors.white),
                                   ),
-                                  subtitle: Text(
-                                    '@${u.username}',
-                                    style: TextStyle(
-                                      color: Colors.grey[400],
-                                      fontSize: 12,
-                                    ),
+                                  subtitle: Row(
+                                    children: [
+                                      Text(
+                                        '@${u.username}',
+                                        style: TextStyle(color: Colors.grey[400]),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '•',
+                                        style: TextStyle(color: Colors.grey[500]),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          u.isOnline 
+                                              ? 'online' 
+                                              : _formatRelativeTime(u.lastSeen),
+                                          style: TextStyle(
+                                            color: u.isOnline ? const Color(0xFF00E676) : Colors.grey[400],
+                                            fontSize: 12,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 );
                               },
@@ -7096,6 +7196,36 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         );
       },
     );
+  }
+
+  DateTime _parseUtcTimestamp(String timestamp) {
+    final hasTimezone = RegExp(r'[zZ]|[+-]\d{2}:?\d{2}$').hasMatch(timestamp);
+    final parsed = DateTime.parse(hasTimezone ? timestamp : '${timestamp}Z');
+    return parsed.toLocal();
+  }
+
+  String _formatRelativeTime(String? lastSeen) {
+    if (lastSeen == null || lastSeen.isEmpty) return 'offline';
+    try {
+      final dateTime = _parseUtcTimestamp(lastSeen);
+      final now = DateTime.now();
+      final difference = now.difference(dateTime);
+
+      if (difference.inMinutes < 1) return 'last seen just now';
+      if (difference.inMinutes < 60) {
+        final mins = difference.inMinutes;
+        return 'last seen ${mins}m ago';
+      }
+      if (difference.inHours < 24) {
+        final hours = difference.inHours;
+        return 'last seen ${hours}h ago';
+      }
+      if (difference.inDays == 1) return 'last seen yesterday';
+      if (difference.inDays < 7) return 'last seen ${difference.inDays}d ago';
+      return 'last seen ${dateTime.month}/${dateTime.day}';
+    } catch (e) {
+      return 'offline';
+    }
   }
 
   /// Group settings sheet: edit info (admin), add members (admin), leave group.

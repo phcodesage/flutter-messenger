@@ -3,6 +3,8 @@ import '../models/lobby_user.dart';
 import '../services/lobby_service.dart';
 import '../services/group_service.dart';
 import '../services/storage_service.dart';
+import '../services/socket_service.dart';
+import '../widgets/cached_image.dart';
 
 /// Create group screen - select members and create group
 class CreateGroupScreen extends StatefulWidget {
@@ -23,12 +25,20 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   bool _isLoading = true;
   bool _isCreating = false;
 
+  final SocketService _socketService = SocketService();
+  final String _socketListenerKey = 'create_group_screen_${DateTime.now().millisecondsSinceEpoch}';
+
   @override
   void initState() {
     super.initState();
     _checkAdminAccess();
     _loadUsers();
     _searchController.addListener(_filterUsers);
+    
+    // Subscribe to real-time presence updates
+    _socketService.addListener('presenceUpdate', _socketListenerKey, (data) {
+      _handlePresenceUpdate(data);
+    });
   }
 
   Future<void> _checkAdminAccess() async {
@@ -142,10 +152,71 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   @override
   void dispose() {
+    _socketService.removeListener('presenceUpdate', _socketListenerKey);
     _groupNameController.dispose();
     _descriptionController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  DateTime _parseUtcTimestamp(String timestamp) {
+    final hasTimezone = RegExp(r'[zZ]|[+-]\d{2}:?\d{2}$').hasMatch(timestamp);
+    final parsed = DateTime.parse(hasTimezone ? timestamp : '${timestamp}Z');
+    return parsed.toLocal();
+  }
+
+  String _formatRelativeTime(String? lastSeen) {
+    if (lastSeen == null || lastSeen.isEmpty) return 'offline';
+    try {
+      final dateTime = _parseUtcTimestamp(lastSeen);
+      final now = DateTime.now();
+      final difference = now.difference(dateTime);
+
+      if (difference.inMinutes < 1) return 'last seen just now';
+      if (difference.inMinutes < 60) {
+        final mins = difference.inMinutes;
+        return 'last seen ${mins}m ago';
+      }
+      if (difference.inHours < 24) {
+        final hours = difference.inHours;
+        return 'last seen ${hours}h ago';
+      }
+      if (difference.inDays == 1) return 'last seen yesterday';
+      if (difference.inDays < 7) return 'last seen ${difference.inDays}d ago';
+      return 'last seen ${dateTime.month}/${dateTime.day}';
+    } catch (e) {
+      return 'offline';
+    }
+  }
+
+  void _handlePresenceUpdate(Map<String, dynamic> data) {
+    final userId = data['user_id'] as int?;
+    final status = data['status'] as String?;
+    if (userId == null || status == null) return;
+    
+    final isOnline = data['is_online'] as bool? ?? (status == 'online');
+    final timestamp = data['timestamp'] as String?;
+
+    if (!mounted) return;
+    setState(() {
+      final allIndex = _allUsers.indexWhere((u) => u.id == userId);
+      if (allIndex != -1) {
+        _allUsers[allIndex] = _allUsers[allIndex].copyWith(
+          status: status,
+          isOnline: isOnline,
+          lastSeen: timestamp,
+        );
+      }
+      
+      final filteredIndex = _filteredUsers.indexWhere((u) => u.id == userId);
+      if (filteredIndex != -1) {
+        _filteredUsers[filteredIndex] = _filteredUsers[filteredIndex].copyWith(
+          status: status,
+          isOnline: isOnline,
+          lastSeen: timestamp,
+        );
+      }
+    });
   }
 
   @override
@@ -287,15 +358,86 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                           user.fullName,
                           style: const TextStyle(color: Colors.white),
                         ),
-                        subtitle: Text(
-                          '@${user.username}',
-                          style: TextStyle(color: Colors.grey[400]),
+                        subtitle: Row(
+                          children: [
+                            Text(
+                              '@${user.username}',
+                              style: TextStyle(color: Colors.grey[400]),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '•',
+                              style: TextStyle(color: Colors.grey[500]),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                user.isOnline 
+                                    ? 'online' 
+                                    : _formatRelativeTime(user.lastSeen),
+                                style: TextStyle(
+                                  color: user.isOnline ? const Color(0xFF00E676) : Colors.grey[400],
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
-                        secondary: CircleAvatar(
-                          backgroundColor: const Color(0xFF8B5CF6),
-                          child: Text(
-                            user.fullName[0].toUpperCase(),
-                            style: const TextStyle(color: Colors.white),
+                        secondary: SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: Stack(
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: const Color(0xFF8B5CF6),
+                                radius: 20,
+                                child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
+                                    ? ClipOval(
+                                        child: CachedImage(
+                                          url: user.avatarUrl!,
+                                          width: 40,
+                                          height: 40,
+                                          fit: BoxFit.cover,
+                                          placeholderColor: const Color(0xFF8B5CF6),
+                                          errorWidget: Text(
+                                            user.initials,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    : Text(
+                                        user.initials,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                              ),
+                              Positioned(
+                                right: 2,
+                                bottom: 2,
+                                child: Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: user.isOnline
+                                        ? const Color(0xFF00E676)
+                                        : (user.status == 'away'
+                                            ? const Color(0xFFFFC107)
+                                            : Colors.grey[600]!),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: const Color(0xFF0F172A),
+                                      width: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         activeColor: const Color(0xFF8B5CF6),

@@ -100,8 +100,8 @@ class GroupService {
         final data = jsonDecode(response.body);
         debugPrint('📡 Create group response: $data');
 
-        // Handle both response formats: {data: {...}} or direct group object
-        final groupData = data['data'] ?? data;
+        // Handle response formats: {group: {...}}, {data: {...}}, or direct group object
+        final groupData = data['group'] ?? data['data'] ?? data;
         return Group.fromJson(groupData as Map<String, dynamic>);
       } else {
         final error = jsonDecode(response.body);
