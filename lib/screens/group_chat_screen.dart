@@ -34,6 +34,7 @@ import '../services/chat_cache_service.dart';
 import '../services/media_preload_service.dart';
 import '../services/translation_service.dart';
 import '../services/active_chat_service.dart';
+import '../services/draft_service.dart';
 import '../services/firebase_messaging_service.dart';
 import '../widgets/reaction_picker.dart';
 import '../widgets/color_picker_modal.dart';
@@ -92,6 +93,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   // Reply & Edit state
   GroupMessage? _replyingToMessage;
   GroupMessage? _editingMessage;
+
+  // Draft persistence (per-room unsent text — see DraftService)
+  Timer? _draftSaveDebounce;
+  String get _draftRoomKey => 'group:${widget.group.id}';
 
   // Reaction state
   final Map<int, Map<String, Set<String>>> _messageReactions = {};
@@ -165,12 +170,42 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Timer? _typingEmitTimer;
   Timer? _typingAutoStopTimer;
 
+  void _loadDraftIntoComposer() {
+    final roomKey = _draftRoomKey;
+    DraftService().loadText(roomKey).then((draft) {
+      if (!mounted || draft.isEmpty || _editingMessage != null) return;
+      _messageController.text = draft;
+      _messageController.selection = TextSelection.collapsed(
+        offset: draft.length,
+      );
+    });
+  }
+
+  /// Saves composer text as a draft on every keystroke (debounced). Emptying
+  /// the text (including the clear() call on send) clears the draft
+  /// immediately, which also undoes any prior "left with unsent text" bump.
+  void _onComposerTextChangedForDraft() {
+    if (_editingMessage != null) return; // don't persist in-progress edits as a draft
+    final roomKey = _draftRoomKey;
+    final text = _messageController.text;
+    _draftSaveDebounce?.cancel();
+    if (text.trim().isEmpty) {
+      unawaited(DraftService().setText(roomKey, ''));
+      return;
+    }
+    _draftSaveDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(DraftService().setText(roomKey, text));
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _inputFocusNode.addListener(_onFocusChange);
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_syncCommonPhrasesVisibility);
+    _messageController.addListener(_onComposerTextChangedForDraft);
+    _loadDraftIntoComposer();
 
     _initialize();
 
@@ -2184,6 +2219,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   void dispose() {
     _hideMentionOverlay();
+    _draftSaveDebounce?.cancel();
+    if (_editingMessage == null) {
+      // Leaving the room — persist whatever text is left (in case the
+      // debounce above hadn't fired yet) and bump it if it's non-empty.
+      final roomKey = _draftRoomKey;
+      final text = _messageController.text;
+      unawaited(
+        DraftService().setText(roomKey, text).then((_) {
+          if (text.trim().isNotEmpty) {
+            unawaited(DraftService().markLeftWithDraft(roomKey));
+          }
+        }),
+      );
+    }
     // Clear active chat when leaving group chat screen
     ActiveChatService().clearActiveChat();
 
@@ -2199,6 +2248,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _socketService.removeListenersForKey('group_chat_${widget.group.id}');
     _socketService.leaveGroupChat(widget.group.id);
     _messageController.removeListener(_syncCommonPhrasesVisibility);
+    _messageController.removeListener(_onComposerTextChangedForDraft);
     _messageController.dispose();
     _scrollController.dispose();
     _audioPlayer.dispose();

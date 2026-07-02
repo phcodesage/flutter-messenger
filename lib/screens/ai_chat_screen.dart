@@ -15,6 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import '../models/link_preview.dart';
 import '../services/chat_cache_service.dart';
+import '../services/draft_service.dart';
 import '../services/link_preview_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_service.dart';
@@ -1003,11 +1004,40 @@ class _AiChatScreenState extends State<AiChatScreen>
 
   Uri _aiUri(String path) => Uri.parse('$_baseUrl/api/ai$path');
 
+  Timer? _draftSaveDebounce;
+
+  void _loadDraftIntoComposer() {
+    DraftService().loadText(kAiDraftRoomKey).then((draft) {
+      if (!mounted || draft.isEmpty) return;
+      _messageController.text = draft;
+      _messageController.selection = TextSelection.collapsed(
+        offset: draft.length,
+      );
+    });
+  }
+
+  /// Saves composer text as a draft on every keystroke (debounced). Emptying
+  /// the text (including the clear() call on send) clears the draft
+  /// immediately, which also undoes any prior "left with unsent text" bump.
+  void _onComposerTextChangedForDraft() {
+    final text = _messageController.text;
+    _draftSaveDebounce?.cancel();
+    if (text.trim().isEmpty) {
+      unawaited(DraftService().setText(kAiDraftRoomKey, ''));
+      return;
+    }
+    _draftSaveDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(DraftService().setText(kAiDraftRoomKey, text));
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_handleScrollPosition);
+    _messageController.addListener(_onComposerTextChangedForDraft);
+    _loadDraftIntoComposer();
     _initialize();
   }
 
@@ -1021,6 +1051,18 @@ class _AiChatScreenState extends State<AiChatScreen>
     // Persist a final snapshot so the next open hydrates instantly,
     // including any messages that arrived right before close.
     _persistAiSnapshot();
+    _draftSaveDebounce?.cancel();
+    // Leaving the room — persist whatever text is left (in case the debounce
+    // above hadn't fired yet) and bump it if it's non-empty.
+    final draftText = _messageController.text;
+    unawaited(
+      DraftService().setText(kAiDraftRoomKey, draftText).then((_) {
+        if (draftText.trim().isNotEmpty) {
+          unawaited(DraftService().markLeftWithDraft(kAiDraftRoomKey));
+        }
+      }),
+    );
+    _messageController.removeListener(_onComposerTextChangedForDraft);
     _messageController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();

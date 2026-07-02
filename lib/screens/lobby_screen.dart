@@ -32,6 +32,7 @@ import '../services/storage_service.dart';
 import '../config/api_config.dart';
 import '../services/presence_service.dart';
 import '../services/active_chat_service.dart';
+import '../services/draft_service.dart';
 import '../services/pending_incoming_call_service.dart';
 import '../services/chat_cache_service.dart';
 import '../services/share_intent_service.dart';
@@ -137,6 +138,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     PendingIncomingCallService().pending.addListener(
       _onPendingIncomingCallChanged,
     );
+    // Rebuild conversation previews/order when a draft is saved/cleared/bumped.
+    unawaited(DraftService().load());
+    DraftService().revision.addListener(_onDraftsChanged);
     _loadLobby();
     _loadAiSessionPresence();
     _loadAdminStatus();
@@ -1286,6 +1290,10 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  void _onDraftsChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _handleIncomingCall(Map<String, dynamic> data) async {
     if (!mounted) return;
 
@@ -2012,6 +2020,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     PendingIncomingCallService().pending.removeListener(
       _onPendingIncomingCallChanged,
     );
+    DraftService().revision.removeListener(_onDraftsChanged);
     _searchController.removeListener(_onSearchQueryChanged);
     _searchDebounceTimer?.cancel();
     _searchController.dispose();
@@ -2363,12 +2372,73 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// A conversation left with an unsent draft is treated as a recent action
+  /// (like a real message) until the draft is sent or cleared — mirrors the
+  /// web app's "leaving a room bumps it" behavior. Since the list is always
+  /// re-sorted from data (not a persisted DOM order), removing the draft's
+  /// bump timestamp is all "undo" requires.
+  DateTime _effectiveActivityTime(DateTime realTime, String draftRoomKey) {
+    final bump = DraftService().getBumpTime(draftRoomKey);
+    if (bump != null && bump.isAfter(realTime)) return bump;
+    return realTime;
+  }
+
+  DateTime _effectiveUserActivityTime(LobbyUser user) =>
+      _effectiveActivityTime(
+        _parseMessageTime(user.lastMessageTime),
+        'user:${user.id}',
+      );
+
+  DateTime _effectiveAiActivityTime() => _effectiveActivityTime(
+    _parseMessageTime(_aiLastMessageTime),
+    kAiDraftRoomKey,
+  );
+
+  /// Draft-aware replacement for a plain preview `Text` — shows "Draft: …" in
+  /// place of the real last-message preview when this room has unsent text.
+  Widget _draftAwarePreviewText(
+    String roomKey,
+    String fallbackText,
+    double fontSize,
+  ) {
+    final draft = DraftService().getText(roomKey);
+    if (draft.isEmpty) {
+      return Text(
+        fallbackText,
+        style: TextStyle(color: Colors.grey[400], fontSize: fontSize),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
+    }
+    final truncated = draft.length > 30 ? '${draft.substring(0, 30)}...' : draft;
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: 'Draft: ',
+            style: TextStyle(
+              color: const Color(0xFFFB7185),
+              fontWeight: FontWeight.w600,
+              fontSize: fontSize,
+            ),
+          ),
+          TextSpan(
+            text: truncated,
+            style: TextStyle(color: Colors.grey[300], fontSize: fontSize),
+          ),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
   List<LobbyUser> _sortUsersByRecentActivity(List<LobbyUser> users) {
     final sortedUsers = List<LobbyUser>.from(users);
     sortedUsers.sort((a, b) {
-      final timeCompare = _parseMessageTime(
-        b.lastMessageTime,
-      ).compareTo(_parseMessageTime(a.lastMessageTime));
+      final timeCompare = _effectiveUserActivityTime(
+        b,
+      ).compareTo(_effectiveUserActivityTime(a));
       if (timeCompare != 0) return timeCompare;
       return a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
     });
@@ -2394,11 +2464,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       return builders;
     }
 
-    final aiTime = _parseMessageTime(_aiLastMessageTime);
+    final aiTime = _effectiveAiActivityTime();
     var aiInserted = false;
 
     for (final user in users) {
-      final userTime = _parseMessageTime(user.lastMessageTime);
+      final userTime = _effectiveUserActivityTime(user);
       if (!aiInserted && aiTime.compareTo(userTime) >= 0) {
         builders.add(_buildAiChatTile);
         aiInserted = true;
@@ -2476,12 +2546,21 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     return items;
   }
 
+  int _effectiveGroupActivityMs(Group group) {
+    final real = group.lastMessage?.timestampMs ?? 0;
+    final bump = DraftService()
+        .getBumpTime('group:${group.id}')
+        ?.millisecondsSinceEpoch;
+    if (bump != null && bump > real) return bump;
+    return real;
+  }
+
   List<Group> _sortGroupsByRecentActivity(List<Group> groups) {
     final sortedGroups = List<Group>.from(groups);
     sortedGroups.sort((a, b) {
-      final timeCompare = (b.lastMessage?.timestampMs ?? 0).compareTo(
-        a.lastMessage?.timestampMs ?? 0,
-      );
+      final timeCompare = _effectiveGroupActivityMs(
+        b,
+      ).compareTo(_effectiveGroupActivityMs(a));
       if (timeCompare != 0) return timeCompare;
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
@@ -4083,14 +4162,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                         ),
                       ),
                       SizedBox(height: _cs(context, 2)),
-                      // Last message preview
-                      Text(
+                      // Last message preview (or "Draft: …" if unsent text is pending)
+                      _draftAwarePreviewText(
+                        'group:${group.id}',
                         lastMessageText,
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 12 * s,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                        12 * s,
                       ),
                     ],
                   ),
@@ -4362,16 +4438,13 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                         ),
                       ),
                       SizedBox(height: _cs(context, 2)),
-                      // Last message preview OR typing indicator
+                      // Last message preview OR typing indicator (or "Draft: …")
                       _typingUsers.containsKey(user.id)
                           ? const _TypingIndicator()
-                          : Text(
+                          : _draftAwarePreviewText(
+                              'user:${user.id}',
                               _getLastMessagePreview(),
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 12 * s,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                              12 * s,
                             ),
                     ],
                   ),
@@ -4506,15 +4579,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                         ],
                       ),
                       SizedBox(height: _cs(context, 2)),
-                      Text(
-                        preview,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 12 * s,
-                        ),
-                      ),
+                      _draftAwarePreviewText(kAiDraftRoomKey, preview, 12 * s),
                     ],
                   ),
                 ),

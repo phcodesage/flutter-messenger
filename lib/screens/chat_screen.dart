@@ -38,6 +38,7 @@ import '../services/link_preview_service.dart';
 import '../widgets/color_picker_modal.dart';
 import '../widgets/common_phrase_bar.dart';
 import '../services/active_chat_service.dart';
+import '../services/draft_service.dart';
 import '../services/pending_incoming_call_service.dart';
 import '../utils/notification_handler.dart';
 import '../widgets/call_setup_modal.dart';
@@ -322,6 +323,10 @@ class _ChatScreenState extends State<ChatScreen>
   // Edit state
   Message? _editingMessage;
 
+  // Draft persistence (per-room unsent text — see DraftService)
+  Timer? _draftSaveDebounce;
+  String get _draftRoomKey => 'user:${widget.otherUser.id}';
+
   // Top SnackBar Overlay state
   OverlayEntry? _topSnackBarEntry;
   Timer? _topSnackBarTimer;
@@ -432,6 +437,35 @@ class _ChatScreenState extends State<ChatScreen>
     _taskModalVersion.value = _taskModalVersion.value + 1;
   }
 
+  void _loadDraftIntoComposer() {
+    final roomKey = _draftRoomKey;
+    DraftService().loadText(roomKey).then((draft) {
+      if (!mounted || draft.isEmpty || _editingMessage != null) return;
+      _messageController.text = draft;
+      _messageController.selection = TextSelection.collapsed(
+        offset: draft.length,
+      );
+    });
+  }
+
+  /// Saves composer text as a draft on every keystroke (debounced) — mirrors
+  /// the web app's `input` listener. Emptying the text (including the clear()
+  /// call `_sendMessage` makes on send) clears the draft immediately, which
+  /// also undoes any prior "left with unsent text" bump.
+  void _onComposerTextChangedForDraft() {
+    if (_editingMessage != null) return; // don't persist in-progress edits as a draft
+    final roomKey = _draftRoomKey;
+    final text = _messageController.text;
+    _draftSaveDebounce?.cancel();
+    if (text.trim().isEmpty) {
+      unawaited(DraftService().setText(roomKey, ''));
+      return;
+    }
+    _draftSaveDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(DraftService().setText(roomKey, text));
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -448,6 +482,8 @@ class _ChatScreenState extends State<ChatScreen>
     _inputFocusNode.addListener(_onFocusChange);
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_syncCommonPhrasesVisibility);
+    _messageController.addListener(_onComposerTextChangedForDraft);
+    _loadDraftIntoComposer();
     _fileOpsChannel.setMethodCallHandler(_handleFileOpsMethodCall);
 
     // Set this user as active to prevent FCM notifications
@@ -11621,6 +11657,20 @@ class _ChatScreenState extends State<ChatScreen>
   @override
   void dispose() {
     unawaited(_persistConversationCacheSnapshot());
+    _draftSaveDebounce?.cancel();
+    if (_editingMessage == null) {
+      // Leaving the room — persist whatever text is left (in case the
+      // debounce above hadn't fired yet) and bump it if it's non-empty.
+      final roomKey = _draftRoomKey;
+      final text = _messageController.text;
+      unawaited(
+        DraftService().setText(roomKey, text).then((_) {
+          if (text.trim().isNotEmpty) {
+            unawaited(DraftService().markLeftWithDraft(roomKey));
+          }
+        }),
+      );
+    }
     _fileOpsChannel.setMethodCallHandler(null);
     _inputModeSwitchTimer?.cancel();
     _emojiSwitchTimer?.cancel();
@@ -11633,6 +11683,7 @@ class _ChatScreenState extends State<ChatScreen>
     _taskBadgeAnimController.dispose();
     _taskModalVersion.dispose();
     _messageController.removeListener(_syncCommonPhrasesVisibility);
+    _messageController.removeListener(_onComposerTextChangedForDraft);
     _messageController.dispose();
     _autoCorrectionWrongController.dispose();
     _autoCorrectionCorrectController.dispose();
