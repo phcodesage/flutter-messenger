@@ -2280,6 +2280,9 @@ class _AiChatScreenState extends State<AiChatScreen>
             headers: <String, String>{
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $token',
+              // Required by the backend to guard against accidental destructive
+              // deletes — the web client sends the same header (ai-chat.js).
+              'X-AI-Delete-Confirm': 'true',
             },
           )
           .timeout(ApiConfig.connectionTimeout);
