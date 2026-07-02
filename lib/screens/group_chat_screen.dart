@@ -9436,7 +9436,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           showEmojiPicker: _showEmojiPicker,
           isEditing: _editingMessage != null,
           onShowEmojiPickerModal: () => _showEmojiPickerModal(context),
-          onClipboardPasteShortcut: _pasteFromClipboard,
+          onClipboardPasteShortcut: _tryPasteClipboardMedia,
           onInputContextMenuOpened: () {},
           onContentInserted: _onGroupContentInserted,
           onTextChanged: _onGroupComposerTextChanged,

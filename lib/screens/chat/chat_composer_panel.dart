@@ -38,7 +38,7 @@ class ChatComposerPanel extends StatelessWidget {
   final bool showEmojiPicker;
   final bool isEditing;
   final VoidCallback onShowEmojiPickerModal;
-  final VoidCallback onClipboardPasteShortcut;
+  final Future<bool> Function() onClipboardPasteShortcut;
   final VoidCallback onInputContextMenuOpened;
 
   /// Called when the soft keyboard inserts rich content (e.g. an image/GIF via
@@ -289,7 +289,7 @@ class _ComposerInput extends StatelessWidget {
   final FocusNode inputFocusNode;
   final ScrollController inputScrollController;
   final TextStyle messageTextStyle;
-  final VoidCallback onClipboardPasteShortcut;
+  final Future<bool> Function() onClipboardPasteShortcut;
   final VoidCallback onInputContextMenuOpened;
   final void Function(KeyboardInsertedContent) onContentInserted;
   final void Function(String) onTextChanged;
@@ -321,7 +321,14 @@ class _ComposerInput extends StatelessWidget {
               _ComposerPasteImageIntent:
                   CallbackAction<_ComposerPasteImageIntent>(
                     onInvoke: (intent) {
-                      onClipboardPasteShortcut();
+                      onClipboardPasteShortcut().then((handled) {
+                        if (!handled && context.mounted) {
+                          Actions.maybeInvoke(
+                            context,
+                            const PasteTextIntent(SelectionChangedCause.keyboard),
+                          );
+                        }
+                      });
                       return null;
                     },
                   ),
@@ -349,21 +356,47 @@ class _ComposerInput extends StatelessWidget {
               onTapOutside: (_) {},
               contextMenuBuilder: (context, editableTextState) {
                 onInputContextMenuOpened();
-                final buttonItems = editableTextState.contextMenuButtonItems;
-                final customItems = <ContextMenuButtonItem>[
-                  ContextMenuButtonItem(
-                    label: 'Paste',
-                    onPressed: () {
+                final buttonItems = List<ContextMenuButtonItem>.from(
+                  editableTextState.contextMenuButtonItems,
+                );
+                
+                final pasteItemIndex = buttonItems.indexWhere(
+                  (item) => item.type == ContextMenuButtonType.paste,
+                );
+
+                if (pasteItemIndex != -1) {
+                  final originalItem = buttonItems[pasteItemIndex];
+                  buttonItems[pasteItemIndex] = ContextMenuButtonItem(
+                    type: ContextMenuButtonType.paste,
+                    label: originalItem.label,
+                    onPressed: () async {
                       ContextMenuController.removeAny();
-                      onClipboardPasteShortcut();
+                      final handled = await onClipboardPasteShortcut();
+                      if (!handled && originalItem.onPressed != null) {
+                        originalItem.onPressed!();
+                      }
                     },
-                  ),
-                  ...buttonItems,
-                ];
+                  );
+                } else {
+                  buttonItems.insert(
+                    0,
+                    ContextMenuButtonItem(
+                      type: ContextMenuButtonType.paste,
+                      label: 'Paste',
+                      onPressed: () async {
+                        ContextMenuController.removeAny();
+                        final handled = await onClipboardPasteShortcut();
+                        if (!handled) {
+                          editableTextState.pasteText(SelectionChangedCause.toolbar);
+                        }
+                      },
+                    ),
+                  );
+                }
 
                 return AdaptiveTextSelectionToolbar.buttonItems(
                   anchors: editableTextState.contextMenuAnchors,
-                  buttonItems: customItems,
+                  buttonItems: buttonItems,
                 );
               },
               dragStartBehavior: DragStartBehavior.start,

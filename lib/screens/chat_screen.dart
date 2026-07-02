@@ -8326,9 +8326,9 @@ class _ChatScreenState extends State<ChatScreen>
 
   final ImagePicker _imagePicker = ImagePicker();
 
-  void _onComposerPasteShortcut() {
+  Future<bool> _onComposerPasteShortcut() async {
     debugPrint('[ClipboardPaste] shortcut triggered');
-    unawaited(_tryHandleClipboardImagePaste());
+    return await _tryPasteClipboardMedia();
   }
 
   /// Handles rich content inserted by the soft keyboard's image/GIF button
