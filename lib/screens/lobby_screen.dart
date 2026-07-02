@@ -514,9 +514,18 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadAdminStatus() async {
-    final isAdmin = await StorageService.getIsAdmin();
+    // Paint from the cached flag immediately for a fast first frame…
+    final cached = await StorageService.getIsAdmin();
     if (mounted) {
-      setState(() => _isCurrentUserAdmin = isAdmin);
+      setState(() => _isCurrentUserAdmin = cached);
+    }
+    // …then reconcile with the server, since the cached flag is only written at
+    // login and can be stale (e.g. admin granted after the last login). This is
+    // what makes the admin-only "Delete all messages" action reappear without
+    // forcing a re-login.
+    final fresh = await AuthService.refreshCachedAdminStatus();
+    if (fresh != null && fresh != cached && mounted) {
+      setState(() => _isCurrentUserAdmin = fresh);
     }
   }
 

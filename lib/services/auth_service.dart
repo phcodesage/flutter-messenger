@@ -237,6 +237,24 @@ class AuthService {
     }
   }
 
+  /// Re-fetch the current user from the server and update locally-cached flags
+  /// (currently `is_admin`) so changes such as being granted/revoked admin take
+  /// effect without requiring a re-login. The cached flag is otherwise only
+  /// written at login/register, leaving long-lived sessions stale.
+  ///
+  /// Returns the fresh admin status, or `null` if the refresh failed
+  /// (offline / expired token) so callers can keep the cached value.
+  static Future<bool?> refreshCachedAdminStatus() async {
+    try {
+      final user = await getCurrentUser();
+      await StorageService.saveIsAdmin(user.isAdmin);
+      return user.isAdmin;
+    } catch (e) {
+      debugPrint('Admin status refresh failed: $e');
+      return null;
+    }
+  }
+
   /// Request password reset
   static Future<String> forgotPassword({
     required String emailOrUsername,
