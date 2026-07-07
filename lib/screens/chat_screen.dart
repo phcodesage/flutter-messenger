@@ -15962,8 +15962,15 @@ class _ChatScreenState extends State<ChatScreen>
     if (_isSelfChat && message.senderId == _currentUserId) {
       return 'seen';
     }
+    // History/loaded messages reflect their real state instead of always
+    // showing "seen": isRead is authoritative for "seen" (legacy read messages
+    // may have is_read=true with no read_at), otherwise fall back to the
+    // server-computed status (sent -> delivered -> seen). Fixes outgoing
+    // bubbles showing green double-ticks on reload despite being only
+    // delivered/sent. Mirrors the web chat.js fix.
     if (_databaseLoadedMessageIds.contains(message.id)) {
-      return 'seen';
+      if (message.isRead) return 'seen';
+      return message.status.isEmpty ? 'sent' : message.status;
     }
     return message.status;
   }

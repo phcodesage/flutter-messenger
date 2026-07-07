@@ -20,6 +20,8 @@ class LobbyUser {
   final String? lastMessage;
   final String? lastMessageTime;
   final bool? lastMessageIsFromMe;
+  /// Delivery status of the last message when it's from me: sent/delivered/seen.
+  final String? lastMessageStatus;
 
   LobbyUser({
     required this.id,
@@ -42,6 +44,7 @@ class LobbyUser {
     this.lastMessage,
     this.lastMessageTime,
     this.lastMessageIsFromMe,
+    this.lastMessageStatus,
   });
 
   factory LobbyUser.fromJson(Map<String, dynamic> json) {
@@ -66,6 +69,7 @@ class LobbyUser {
       lastMessage: json['last_message'] as String?,
       lastMessageTime: json['last_message_time'] as String?,
       lastMessageIsFromMe: json['last_message_is_from_me'] as bool?,
+      lastMessageStatus: json['last_message_status'] as String?,
     );
   }
 
@@ -91,6 +95,7 @@ class LobbyUser {
       'last_message': lastMessage,
       'last_message_time': lastMessageTime,
       'last_message_is_from_me': lastMessageIsFromMe,
+      'last_message_status': lastMessageStatus,
     };
   }
 
@@ -117,6 +122,7 @@ class LobbyUser {
     String? lastMessage,
     String? lastMessageTime,
     bool? lastMessageIsFromMe,
+    String? lastMessageStatus,
   }) {
     return LobbyUser(
       id: id ?? this.id,
@@ -139,6 +145,7 @@ class LobbyUser {
       lastMessage: lastMessage ?? this.lastMessage,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       lastMessageIsFromMe: lastMessageIsFromMe ?? this.lastMessageIsFromMe,
+      lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus,
     );
   }
 

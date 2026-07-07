@@ -1674,6 +1674,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         lastMessage: preview,
         lastMessageTime: createdAt,
         lastMessageIsFromMe: isFromMe,
+        // A newly delivered message starts as "sent"; delivered/seen are picked
+        // up on the next lobby refresh. Incoming messages show no tick.
+        lastMessageStatus: isFromMe ? 'sent' : null,
       );
 
       _lobbyUsers[userIndex] = updatedUser;
@@ -1905,6 +1908,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
           lastMessage: content ?? user.lastMessage,
           lastMessageTime: createdAt ?? user.lastMessageTime,
           lastMessageIsFromMe: true, // Message is from current user
+          lastMessageStatus: 'sent', // just sent; delivered/seen come on refresh
         );
 
         _lobbyUsers[userIndex] = updatedUser;
@@ -2439,6 +2443,25 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       ),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  /// Bold delivery tick for our own last message in the contact list.
+  /// sent → single grey ✓, delivered → double grey ✓✓, seen → double cyan ✓✓.
+  Widget _buildLastMessageStatusTick(String? status, double fontSize) {
+    final effective = (status == null || status.isEmpty) ? 'sent' : status;
+    final isDouble = effective == 'delivered' || effective == 'seen';
+    final color = effective == 'seen'
+        ? const Color(0xFF00D9FF) // cyan, matches the chat "seen" tick
+        : Colors.grey[400]!;
+    return Text(
+      isDouble ? '✓✓' : '✓',
+      style: TextStyle(
+        color: color,
+        fontSize: fontSize,
+        fontWeight: FontWeight.bold,
+        height: 1.0,
+      ),
     );
   }
 
@@ -4230,8 +4253,10 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         final message = user.lastMessage!.length > 25
             ? '${user.lastMessage!.substring(0, 25)}...'
             : user.lastMessage!;
-        final checkmark = user.lastMessageIsFromMe == true ? ' ✓' : '';
-        return '$prefix$message$checkmark';
+        // The delivery tick is rendered as a separate styled widget (see the
+        // preview row below), not baked into the text, so it can show the real
+        // sent/delivered/seen state in bold with the right color.
+        return '$prefix$message';
       }
       return 'No messages yet';
     }
@@ -4450,10 +4475,32 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                       // Last message preview OR typing indicator (or "Draft: …")
                       _typingUsers.containsKey(user.id)
                           ? const _TypingIndicator()
-                          : _draftAwarePreviewText(
-                              'user:${user.id}',
-                              _getLastMessagePreview(),
-                              12 * s,
+                          : Builder(
+                              builder: (_) {
+                                final roomKey = 'user:${user.id}';
+                                final previewWidget = _draftAwarePreviewText(
+                                  roomKey,
+                                  _getLastMessagePreview(),
+                                  12 * s,
+                                );
+                                // Only show a delivery tick for our own last
+                                // message, and never while a draft is pending.
+                                final showStatus =
+                                    DraftService().getText(roomKey).isEmpty &&
+                                    user.lastMessageIsFromMe == true &&
+                                    (user.lastMessage?.isNotEmpty ?? false);
+                                if (!showStatus) return previewWidget;
+                                return Row(
+                                  children: [
+                                    Flexible(child: previewWidget),
+                                    SizedBox(width: 4 * s),
+                                    _buildLastMessageStatusTick(
+                                      user.lastMessageStatus,
+                                      12 * s,
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                     ],
                   ),
