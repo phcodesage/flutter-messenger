@@ -150,9 +150,22 @@ Future<LobbyUser?> _resolveLobbyUser(
 
 Future<void> _bootstrapAppServices() async {
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    final firebaseOptions = DefaultFirebaseOptions.currentPlatform;
+    // The iOS Firebase app hasn't been registered yet, so firebase_options.dart
+    // still carries a placeholder appId. Passing it to the native FIRApp would
+    // throw an uncaught NSException ("invalid GOOGLE_APP_ID") that crashes the
+    // process before Dart can catch it. Skip Firebase/FCM until a real config is
+    // generated via `flutterfire configure`; this re-enables itself once appId
+    // becomes real.
+    if (firebaseOptions.appId.contains('YOUR_')) {
+      debugPrint(
+        'Skipping Firebase init: placeholder appId. '
+        'Run `flutterfire configure` to enable push notifications.',
+      );
+      return;
+    }
+
+    await Firebase.initializeApp(options: firebaseOptions);
 
     // Register FCM background message handler
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
@@ -385,7 +398,7 @@ class _MessengerAppState extends State<MessengerApp>
         // ignore: deprecated_member_use
         final double systemScale = mediaQueryData.textScaleFactor;
 
-        // Calculate a responsive text scale factor that scales down 
+        // Calculate a responsive text scale factor that scales down
         // on smaller screens (high DPI / large display scale) to prevent cutoffs.
         double factor = systemScale;
         if (screenWidth < 360) {
