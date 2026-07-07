@@ -70,17 +70,40 @@ class ShortcutService {
     return null;
   }
 
-  static Future<void> publishShareTargets(List<LobbyUser> users) async {
+  static Future<void> publishShareTargets(
+    List<LobbyUser> users, {
+    int? selfUserId,
+  }) async {
     if (defaultTargetPlatform != TargetPlatform.android) return;
     try {
+      // Always surface the self-chat ("yourself") as a Direct Share target —
+      // like WhatsApp's "You" — regardless of how recently it was used. Pin it
+      // to the front, then fill with the most-recent contacts, dedup, cap at 4.
+      // (Stay within Android's guaranteed max of 5 dynamic shortcuts/activity;
+      // exceeding it makes addDynamicShortcuts drop them all.)
+      final ordered = <LobbyUser>[];
+      final seen = <int>{};
+      if (selfUserId != null) {
+        final selfIdx = users.indexWhere((u) => u.id == selfUserId);
+        if (selfIdx != -1) {
+          ordered.add(users[selfIdx]);
+          seen.add(selfUserId);
+        }
+      }
+      for (final u in users) {
+        if (seen.add(u.id)) ordered.add(u);
+      }
+
       await _channel.invokeMethod<void>(
         'pushShareTargets',
-        users
+        ordered
             .take(4)
             .map(
               (u) => <String, Object>{
                 'id': u.id,
-                'name': u.fullName,
+                'name': u.id == selfUserId
+                    ? (u.fullName.trim().isEmpty ? 'You' : '${u.fullName} (You)')
+                    : u.fullName,
                 'avatarColorIndex': u.avatarColorIndex,
               },
             )

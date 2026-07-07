@@ -90,7 +90,9 @@ Future<Widget> _resolveInitialHome() async {
   // conversation targets are available even before lobby fully loads.
   final cachedUsers = await ChatCacheService.loadLobbyUsers(userId);
   if (cachedUsers.isNotEmpty) {
-    unawaited(ShortcutService.publishShareTargets(cachedUsers));
+    unawaited(
+      ShortcutService.publishShareTargets(cachedUsers, selfUserId: userId),
+    );
   }
 
   final sharedItems = await ShareIntentService.instance

@@ -12355,14 +12355,14 @@ class _ChatScreenState extends State<ChatScreen>
               message.isTask
                   ? Icons.check_circle
                   : Icons.radio_button_unchecked,
-              color: const Color(0xFFF59E0B),
+              color: const Color(0xFF0D9488), // teal — matches the task accent
               size: 18,
             ),
             const SizedBox(width: 8),
             Text(
               message.isTask ? 'Unmark task' : 'Mark as task',
               style: const TextStyle(
-                color: Colors.white,
+                color: Color(0xFF0D9488), // teal — matches the task accent
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),
@@ -12446,11 +12446,11 @@ class _ChatScreenState extends State<ChatScreen>
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+                        color: const Color(0xFF0D9488).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(
                           color: const Color(
-                            0xFFF59E0B,
+                            0xFF0D9488,
                           ).withValues(alpha: 0.55),
                         ),
                       ),
@@ -12520,7 +12520,7 @@ class _ChatScreenState extends State<ChatScreen>
                       ? Icons.check_circle
                       : Icons.radio_button_unchecked,
                   label: message.isTask ? 'Unmark task' : 'Mark as task',
-                  iconColor: const Color(0xFFF59E0B),
+                  iconColor: const Color(0xFF0D9488), // teal — task accent
                   onTap: () {
                     closeWithAction(
                       sheetContext,
@@ -13852,8 +13852,8 @@ class _ChatScreenState extends State<ChatScreen>
                       color: const Color(0xFF1A1A2B),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: const Color(0xFFFBBF24).withValues(alpha: 0.65),
-                        width: 1.2,
+                        color: const Color(0xFF0D9488).withValues(alpha: 0.8),
+                        width: 1.4,
                       ),
                       boxShadow: [
                         BoxShadow(
@@ -13885,18 +13885,18 @@ class _ChatScreenState extends State<ChatScreen>
                                 height: 28,
                                 decoration: BoxDecoration(
                                   color: const Color(
-                                    0xFFF59E0B,
-                                  ).withValues(alpha: 0.2),
+                                    0xFF0D9488,
+                                  ).withValues(alpha: 0.22),
                                   shape: BoxShape.circle,
                                   border: Border.all(
                                     color: const Color(
-                                      0xFFF59E0B,
-                                    ).withValues(alpha: 0.6),
+                                      0xFF0D9488,
+                                    ).withValues(alpha: 0.7),
                                   ),
                                 ),
                                 child: const Icon(
                                   Icons.check_circle_outline,
-                                  color: Color(0xFFFBBF24),
+                                  color: Color(0xFF2DD4BF),
                                   size: 16,
                                 ),
                               ),
@@ -13918,19 +13918,19 @@ class _ChatScreenState extends State<ChatScreen>
                                 ),
                                 decoration: BoxDecoration(
                                   color: const Color(
-                                    0xFFF59E0B,
-                                  ).withValues(alpha: 0.2),
+                                    0xFF0D9488,
+                                  ).withValues(alpha: 0.22),
                                   borderRadius: BorderRadius.circular(999),
                                   border: Border.all(
                                     color: const Color(
-                                      0xFFF59E0B,
-                                    ).withValues(alpha: 0.5),
+                                      0xFF0D9488,
+                                    ).withValues(alpha: 0.55),
                                   ),
                                 ),
                                 child: Text(
                                   '${completedTasks.length}/${allTasks.length}',
                                   style: const TextStyle(
-                                    color: Color(0xFFFCD34D),
+                                    color: Color(0xFF5EEAD4),
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -13976,13 +13976,13 @@ class _ChatScreenState extends State<ChatScreen>
                                           height: 50,
                                           decoration: BoxDecoration(
                                             color: const Color(
-                                              0xFFF59E0B,
-                                            ).withValues(alpha: 0.14),
+                                              0xFF0D9488,
+                                            ).withValues(alpha: 0.16),
                                             shape: BoxShape.circle,
                                           ),
                                           child: const Icon(
                                             Icons.task_alt,
-                                            color: Color(0xFFFBBF24),
+                                            color: Color(0xFF2DD4BF),
                                             size: 26,
                                           ),
                                         ),
@@ -14228,7 +14228,7 @@ class _ChatScreenState extends State<ChatScreen>
                   color: const Color(0xFF1A1A2B),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: const Color(0xFFFBBF24).withValues(alpha: 0.45),
+                    color: const Color(0xFF0D9488).withValues(alpha: 0.5),
                   ),
                   boxShadow: [
                     BoxShadow(
@@ -14259,13 +14259,13 @@ class _ChatScreenState extends State<ChatScreen>
                           padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
                             color: const Color(
-                              0xFFF59E0B,
-                            ).withValues(alpha: 0.15),
+                              0xFF0D9488,
+                            ).withValues(alpha: 0.18),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
                             Icons.task_alt,
-                            color: Color(0xFFFBBF24),
+                            color: Color(0xFF2DD4BF),
                             size: 18,
                           ),
                         ),
@@ -14475,7 +14475,7 @@ class _ChatScreenState extends State<ChatScreen>
       Color(0xFF8B5CF6), // purple
       Color(0xFF3B82F6), // blue
       Color(0xFF10B981), // green
-      Color(0xFFF59E0B), // amber
+      Color(0xFF0D9488), // teal
       Color(0xFFEF4444), // red
       Color(0xFF06B6D4), // cyan
       Color(0xFFEC4899), // pink
@@ -15405,7 +15405,9 @@ class _ChatScreenState extends State<ChatScreen>
                   child: Text(
                     'T',
                     style: TextStyle(
-                      color: Colors.white,
+                      // The 'T' takes the task accent color (teal #0D9488 for an
+                      // active task, green when completed) — matching the web.
+                      color: taskAccentColor,
                       fontSize: 9 * scale,
                       fontWeight: FontWeight.w800,
                       height: 1.0,

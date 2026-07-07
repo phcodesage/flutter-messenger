@@ -177,10 +177,10 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     final bool isPinnedExcalidraw =
         widget.canQuickToggleExcalidrawPin(widget.message) &&
         widget.message.excalidrawPinnedAt != null;
-    const excalidrawAccentColor = Color(0xFFB794F6);
+    const excalidrawAccentColor = Color(0xFFEA580C); // orange — pinned Excalidraw
     final taskAccentColor = isTaskCompleted
         ? const Color(0xFF22C55E)
-        : const Color(0xFFF59E0B);
+        : const Color(0xFF0D9488); // teal — matches the web task border/badge
     final bubbleAccentColor = isTaskMessage
         ? taskAccentColor
         : (isPinnedExcalidraw ? excalidrawAccentColor : null);
@@ -198,20 +198,12 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
           color: widget.isSentByMe
               ? const Color(0xFF420796)
               : const Color(0xFF3944BC),
+          // Thick solid accent border (no glow) for task / pinned bubbles.
           border: bubbleAccentColor != null
               ? Border.all(
-                  color: bubbleAccentColor.withValues(alpha: 0.85),
-                  width: 1.4,
+                  color: bubbleAccentColor,
+                  width: 3.0,
                 )
-              : null,
-          boxShadow: bubbleAccentColor != null
-              ? [
-                  BoxShadow(
-                    color: bubbleAccentColor.withValues(alpha: 0.45),
-                    blurRadius: 14,
-                    spreadRadius: 0.2,
-                  ),
-                ]
               : null,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),

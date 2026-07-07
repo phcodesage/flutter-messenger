@@ -3,18 +3,24 @@
     Declares this activity as a Sharing Target so Android will promote it into the
     "Direct Share" row at the top of the system share sheet.
 
-    The <data mimeType="*/*"> combined with our dynamic shortcuts (which carry the
-    matching category) is what causes our chat-contact avatars to appear in row 1 of
-    the Android Sharesheet, just like WhatsApp.
+    The <data> mime types below, combined with our dynamic shortcuts (which carry
+    the matching category + a keyed Person), cause our chat-contact avatars to
+    appear in row 1 of the Android Sharesheet, just like WhatsApp.
+
+    NOTE: We deliberately do NOT include a "*/*" wildcard here. Mixing "*/*" with
+    specific mime types in a <share-target> is known to break Direct Share
+    matching on several Android versions. text/plain is listed explicitly so
+    sharing plain text reliably surfaces our people row.
 -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <share-target android:targetClass="com.example.flutter_messenger_v2.MainActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="text/html" />
+        <data android:mimeType="text/*" />
         <data android:mimeType="image/*" />
         <data android:mimeType="video/*" />
         <data android:mimeType="audio/*" />
-        <data android:mimeType="text/*" />
         <data android:mimeType="application/*" />
-        <data android:mimeType="*/*" />
         <data android:mimeType="text/x-vcard" />
         <data android:mimeType="text/vcard" />
         <data android:mimeType="application/vcard" />

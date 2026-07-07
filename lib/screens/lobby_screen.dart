@@ -2193,8 +2193,9 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         });
         _filterUsers();
         _openSharePickerIfNeeded();
-        // Publish direct-share shortcuts so contacts appear in top row of share sheet
-        ShortcutService.publishShareTargets(users);
+        // Publish direct-share shortcuts so contacts (and always "yourself")
+        // appear in the top row of the Android share sheet.
+        ShortcutService.publishShareTargets(users, selfUserId: userId);
       }
       if (userId != null) {
         await ChatCacheService.saveLobbyUsers(userId, users);

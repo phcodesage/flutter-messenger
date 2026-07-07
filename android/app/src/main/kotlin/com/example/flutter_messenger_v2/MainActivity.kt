@@ -1238,12 +1238,22 @@ class MainActivity : FlutterActivity() {
     private fun pushShareShortcuts(users: List<Map<String, Any>>) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return // shortcuts require API 25+
 
-        val shortcuts = users.take(6).mapIndexedNotNull { rank, user ->
+        // Cap at 4 — under Android's guaranteed max of 5 dynamic shortcuts per
+        // activity. Exceeding the device limit makes addDynamicShortcuts throw,
+        // which (after removeAllDynamicShortcuts) would leave zero Direct Share
+        // targets.
+        val shortcuts = users.take(4).mapIndexedNotNull { rank, user ->
             val userId = user["id"]?.toString() ?: return@mapIndexedNotNull null
             val name = (user["name"] as? String)?.ifBlank { "User $userId" } ?: "User $userId"
             val colorIndex = (user["avatarColorIndex"] as? Int) ?: 0
             val shortcutId = "share_target_user_$userId"
-            val person = Person.Builder().setName(name).build()
+            // A stable Person key is required for Android to rank the shortcut
+            // into the Direct Share "people" row. Without it the app still shows
+            // as a share app, but its contacts never appear in the top row.
+            val person = Person.Builder()
+                .setKey("chatx_user_$userId")
+                .setName(name)
+                .build()
 
             // The shortcut's own intent — Android will merge its extras with the
             // incoming ACTION_SEND intent when the user picks this shortcut.
@@ -1258,7 +1268,7 @@ class MainActivity : FlutterActivity() {
             ShortcutInfoCompat.Builder(this, shortcutId)
                 .setShortLabel(name)
                 .setLongLabel(name)
-                .setIcon(IconCompat.createWithBitmap(makeInitialsIcon(name, colorIndex)))
+                .setIcon(IconCompat.createWithAdaptiveBitmap(makeInitialsIcon(name, colorIndex)))
                 .setActivity(ComponentName(this, MainActivity::class.java))
                 .setIntent(directShareIntent)
                 .setPersons(arrayOf(person))
@@ -1269,8 +1279,19 @@ class MainActivity : FlutterActivity() {
         }
 
         if (shortcuts.isNotEmpty()) {
-            ShortcutManagerCompat.removeAllDynamicShortcuts(this)
-            ShortcutManagerCompat.addDynamicShortcuts(this, shortcuts)
+            try {
+                // Prune stale contacts, then publish each via pushDynamicShortcut —
+                // the API Android documents for registering Direct Share targets.
+                // addDynamicShortcuts only publishes *launcher* shortcuts (which is
+                // why they appeared on icon long-press) and does not reliably make
+                // them appear in the share-sheet's Direct Share row.
+                ShortcutManagerCompat.removeAllDynamicShortcuts(this)
+                for (shortcut in shortcuts) {
+                    ShortcutManagerCompat.pushDynamicShortcut(this, shortcut)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "pushShareShortcuts: failed to publish sharing shortcuts: ${e.message}", e)
+            }
         }
     }
 
@@ -1279,7 +1300,16 @@ class MainActivity : FlutterActivity() {
         ShortcutManagerCompat.reportShortcutUsed(this, "share_target_user_$userId")
     }
 
-    /** Render a coloured circle with up to two initials — used as shortcut icon. */
+    /**
+     * Render a coloured tile with up to two initials, sized as an ADAPTIVE icon
+     * layer (full-bleed background, initials kept inside the center safe zone).
+     *
+     * This is consumed via IconCompat.createWithAdaptiveBitmap so the system
+     * masks it to the launcher/share-sheet shape. Samsung's One UI Direct Share
+     * row silently drops shortcuts whose icons are plain (non-adaptive) bitmaps,
+     * even though the launcher still renders them — which is why the contacts
+     * showed on icon long-press but not in the share sheet.
+     */
     private fun makeInitialsIcon(name: String, colorIndex: Int): Bitmap {
         val avatarColors = intArrayOf(
             0xFFE91E63.toInt(), 0xFF9C27B0.toInt(), 0xFF673AB7.toInt(),
@@ -1287,11 +1317,12 @@ class MainActivity : FlutterActivity() {
             0xFF009688.toInt(), 0xFF4CAF50.toInt(), 0xFFFF9800.toInt(), 0xFFFF5722.toInt(),
         )
         val bg = avatarColors[colorIndex % avatarColors.size]
-        val size = 192
+        val size = 216 // 108dp @ xxhdpi — recommended adaptive icon size
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bg }
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        // Full-bleed background so any system mask (circle/squircle) shows solid
+        // colour to the edges instead of transparent corners.
+        canvas.drawColor(bg)
 
         val initials = name.trim().split(' ')
             .filter { it.isNotEmpty() }
@@ -1300,9 +1331,11 @@ class MainActivity : FlutterActivity() {
             .joinToString("")
             .ifEmpty { "?" }
 
-        paint.apply {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
-            textSize = size * 0.38f
+            // Smaller than before so the glyphs stay within the ~66% safe zone
+            // that adaptive masking guarantees is visible.
+            textSize = size * 0.30f
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.CENTER
         }
