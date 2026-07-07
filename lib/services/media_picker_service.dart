@@ -24,6 +24,27 @@ class MediaPickerService {
   }) async {
     if (!context.mounted) return null;
 
+    // Request photo/video access up front and get the REAL permission state.
+    //
+    // The delegate below is built with an explicit `initialPermission`, which
+    // bypasses wechat_assets_picker's own built-in permission request. If we
+    // hardcode `authorized` (as before), the very first open — when the OS
+    // grant hasn't landed yet — builds the grid assuming access, queries the
+    // media store with no permission, and shows an empty grid. It only worked
+    // on the 2nd try because by then the grant had been recorded. Requesting
+    // here and passing the resolved state makes the first open load correctly.
+    final permission = await PhotoManager.requestPermissionExtend();
+    if (!permission.hasAccess) {
+      debugPrint('pickAssets: photo access not granted ($permission)');
+      if (permission == PermissionState.denied) {
+        // Permanently denied — surface settings so the user can recover.
+        PhotoManager.openSetting();
+      }
+      return null;
+    }
+
+    if (!context.mounted) return null;
+
     final theme = _buildDarkPickerTheme();
 
     // Create the provider for the picker
@@ -39,7 +60,7 @@ class MediaPickerService {
     // instead of opening the picker's built-in viewer.
     final delegate = CustomAssetPickerBuilderDelegate(
       provider: provider,
-      initialPermission: PermissionState.authorized,
+      initialPermission: permission,
       pickerTheme: theme,
       gridCount: 4,
       textDelegate: const EnglishAssetPickerTextDelegate(),
