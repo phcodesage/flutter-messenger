@@ -2853,19 +2853,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     return s;
   }
 
-  /// Message delivery status icon (matches the 1:1 chat).
+  /// Message delivery status icon (matches the 1:1 chat and the web exactly:
+  /// sent/delivered grey #999, seen green #22c55e).
   Widget _buildStatusIndicator(String status, [double scale = 1.0]) {
+    const statusGrey = Color(0xFF999999); // web #999
+    const seenGreen = Color(0xFF22C55E); // web #22c55e
     switch (status) {
       case 'sent':
-        return Icon(Icons.check, size: 16 * scale, color: Colors.white70);
+        return Icon(Icons.check, size: 16 * scale, color: statusGrey);
       case 'delivered':
-        return Icon(Icons.done_all, size: 16 * scale, color: Colors.white70);
+        return Icon(Icons.done_all, size: 16 * scale, color: statusGrey);
       case 'seen':
-        return Icon(
-          Icons.done_all,
-          size: 16 * scale,
-          color: const Color(0xFF00BCD4),
-        );
+        return Icon(Icons.done_all, size: 16 * scale, color: seenGreen);
       case 'failed':
         return Icon(
           Icons.error_outline,
@@ -2873,7 +2872,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           color: const Color(0xFFEF4444),
         );
       default:
-        return Icon(Icons.schedule, size: 16 * scale, color: Colors.white54);
+        return Icon(Icons.schedule, size: 16 * scale, color: statusGrey);
     }
   }
 

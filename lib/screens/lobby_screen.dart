@@ -571,6 +571,14 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       _handleSentMessage(data);
     });
 
+    // Listen for reactions so the conversation preview shows "You reacted 👍" /
+    // "Reacted 👍" as the last action, matching the web app.
+    _socketService.addListener('reactionUpdated', key, (
+      Map<String, dynamic> data,
+    ) {
+      _handleReactionUpdated(data);
+    });
+
     // Listen for file messages (incoming files from web)
     _socketService.addListener('fileReceived', key, (
       Map<String, dynamic> data,
@@ -1923,6 +1931,51 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Reflect a reaction as the conversation's last action ("You reacted 👍" /
+  /// "Reacted 👍"), mirroring the web app. The backend broadcasts
+  /// 'reaction_updated' with the message participants so we can resolve which
+  /// conversation it belongs to. This is an in-place text update (no unread
+  /// bump, no reorder); the real last message is restored on the next refresh.
+  void _handleReactionUpdated(Map<String, dynamic> data) {
+    final emoji = (data['emoji'] ?? data['reaction'])?.toString();
+    if (emoji == null || emoji.isEmpty) return;
+
+    final reactorId = _toInt(data['user_id']);
+    final msgSenderId = _toInt(data['message_sender_id']);
+    final msgRecipientId = _toInt(data['message_recipient_id']);
+    final myId = _socketService.currentUserId;
+    if (reactorId == null || myId == null) return;
+
+    // Resolve the conversation partner: whichever message participant isn't me
+    // (works whether I or the other person reacted).
+    int? targetId;
+    if (msgSenderId != null && msgRecipientId != null) {
+      targetId = msgSenderId == myId ? msgRecipientId : msgSenderId;
+    } else {
+      // Fallback for payloads without participants: the reactor, unless that's
+      // me (then we can't resolve the conversation).
+      targetId = reactorId == myId ? null : reactorId;
+    }
+    if (targetId == null) return;
+
+    final isOutgoing = reactorId == myId;
+    final preview = isOutgoing ? 'You reacted $emoji' : 'Reacted $emoji';
+
+    setState(() {
+      final userIndex = _lobbyUsers.indexWhere((u) => u.id == targetId);
+      if (userIndex == -1) return;
+      final user = _lobbyUsers[userIndex];
+      // Keep lastMessageIsFromMe=false so the preview builder doesn't prepend a
+      // duplicate "You: " or render a delivery tick — the text is already
+      // self-descriptive.
+      _lobbyUsers[userIndex] = user.copyWith(
+        lastMessage: preview,
+        lastMessageIsFromMe: false,
+      );
+      _updateFilteredLists();
+    });
+  }
+
   void _handleFileMessage(Map<String, dynamic> data) {
     if (_isDuplicateRealtimeEvent(data)) return;
 
@@ -2447,13 +2500,14 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   }
 
   /// Bold delivery tick for our own last message in the contact list.
-  /// sent → single grey ✓, delivered → double grey ✓✓, seen → double cyan ✓✓.
+  /// Mirrors the web preview (conversation-manager.js getStatusIcon): sent →
+  /// single grey ✓, delivered → double grey ✓✓, seen → double green ✓✓.
   Widget _buildLastMessageStatusTick(String? status, double fontSize) {
     final effective = (status == null || status.isEmpty) ? 'sent' : status;
     final isDouble = effective == 'delivered' || effective == 'seen';
     final color = effective == 'seen'
-        ? const Color(0xFF00D9FF) // cyan, matches the chat "seen" tick
-        : Colors.grey[400]!;
+        ? const Color(0xFF22C55E) // green, matches web #22c55e "seen"
+        : const Color(0xFF999999); // grey, matches web #999
     return Text(
       isDouble ? '✓✓' : '✓',
       style: TextStyle(

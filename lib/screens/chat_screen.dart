@@ -3233,6 +3233,11 @@ class _ChatScreenState extends State<ChatScreen>
                   .where((message) => message.id > 0)
                   .map((message) => message.id),
             );
+          // Hydrate reactions from the cached messages too, so the fast
+          // first paint already shows the peer's reactions (not just after
+          // the server refresh lands).
+          _messageReactions.clear();
+          _hydrateReactionsForMessages(_messages);
           _isLoading = false; // Show cached messages immediately
         });
       } else {
@@ -3311,65 +3316,10 @@ class _ChatScreenState extends State<ChatScreen>
         _hasMoreMessages = messages.length >= 50;
         _isLoading = false;
 
-        // Populate _messageReactions from loaded messages
+        // Populate reactions from the freshly loaded server messages (the
+        // server is authoritative, so rebuild the whole map).
         _messageReactions.clear();
-        for (final msg in _messages) {
-          if (msg.reactions.isNotEmpty) {
-            debugPrint(
-              'ðŸ“¦ Message ${msg.id} reactions raw: ${msg.reactions}',
-            );
-            _messageReactions[msg.id] = {};
-
-            // Backend sends format: { "counts": {"ðŸ˜€": 1}, "by_user": [{"user_id": 1, "reaction": "ðŸ˜€"}] }
-            // We need to extract reactions from by_user array and group by emoji
-            final byUser = msg.reactions['by_user'];
-            if (byUser is List && byUser.isNotEmpty) {
-              // New format: extract from by_user array
-              for (final entry in byUser) {
-                if (entry is Map) {
-                  final emoji = entry['reaction']?.toString();
-                  final userId = entry['user_id']?.toString();
-                  if (emoji != null && emoji.isNotEmpty && userId != null) {
-                    _messageReactions[msg.id]!.putIfAbsent(
-                      emoji,
-                      () => <String>{},
-                    );
-                    _messageReactions[msg.id]![emoji]!.add(userId);
-                  }
-                }
-              }
-            } else {
-              // Fallback: Legacy format handling
-              // Handle format: { "emoji": { "by_user": [user_id, ...] } }
-              // or format: { "emoji": [user_name1, user_name2] }
-              msg.reactions.forEach((key, value) {
-                // Skip known wrapper keys
-                if (key == 'counts' || key == 'by_user') return;
-
-                if (value is Map) {
-                  // Nested format: { "emoji": { "by_user": [...] } }
-                  final emoji = key.toString();
-                  final users = value['by_user'];
-                  if (users is List && users.isNotEmpty) {
-                    _messageReactions[msg.id]![emoji] = Set<String>.from(
-                      users.map((u) => u.toString()),
-                    );
-                  }
-                } else if (value is List) {
-                  // Simple format: { "emoji": [user1, user2] }
-                  final emoji = key.toString();
-                  _messageReactions[msg.id]![emoji] = Set<String>.from(
-                    value.map((u) => u.toString()),
-                  );
-                }
-              });
-            }
-
-            debugPrint(
-              'ðŸ“¦ Message ${msg.id} reactions parsed: ${_messageReactions[msg.id]}',
-            );
-          }
-        }
+        _hydrateReactionsForMessages(_messages);
       });
 
       await _syncLoadedMessageStatuses(messages);
@@ -3602,6 +3552,9 @@ class _ChatScreenState extends State<ChatScreen>
         _databaseLoadedMessageIds.addAll(
           uniqueNew.where((m) => m.id > 0).map((m) => m.id),
         );
+        // Hydrate reactions for the newly paginated-in messages so older
+        // history shows the peer's reactions too (append — don't clear).
+        _hydrateReactionsForMessages(uniqueNew);
         _hasMoreMessages = olderMessages.length >= 50;
         _isLoadingMore = false;
       });
@@ -15670,6 +15623,54 @@ class _ChatScreenState extends State<ChatScreen>
     return emoji;
   }
 
+  /// Parse each message's server-provided reactions ({counts, by_user}) into
+  /// the screen's messageId → emoji → {reactorUserId} map. Must run on EVERY
+  /// load path (initial fetch, cache-first, pagination) so reactions on
+  /// loaded/history messages — including the other peer's — render, matching
+  /// the web app. (Previously only the initial server fetch hydrated these, so
+  /// cached and older-loaded messages showed no reaction.)
+  void _hydrateReactionsForMessages(Iterable<Message> msgs) {
+    for (final msg in msgs) {
+      if (msg.reactions.isEmpty) continue;
+      final parsed = <String, Set<String>>{};
+
+      // Current backend format: { "counts": {...}, "by_user": [{user_id, reaction}] }
+      final byUser = msg.reactions['by_user'];
+      if (byUser is List && byUser.isNotEmpty) {
+        for (final entry in byUser) {
+          if (entry is Map) {
+            final emoji = entry['reaction']?.toString();
+            final userId = entry['user_id']?.toString();
+            if (emoji != null && emoji.isNotEmpty && userId != null) {
+              parsed.putIfAbsent(emoji, () => <String>{}).add(userId);
+            }
+          }
+        }
+      } else {
+        // Legacy formats: { "emoji": { "by_user": [...] } } or { "emoji": [users] }
+        msg.reactions.forEach((key, value) {
+          if (key == 'counts' || key == 'by_user') return;
+          if (value is Map) {
+            final users = value['by_user'];
+            if (users is List && users.isNotEmpty) {
+              parsed[key.toString()] = Set<String>.from(
+                users.map((u) => u.toString()),
+              );
+            }
+          } else if (value is List) {
+            parsed[key.toString()] = Set<String>.from(
+              value.map((u) => u.toString()),
+            );
+          }
+        });
+      }
+
+      if (parsed.isNotEmpty) {
+        _messageReactions[msg.id] = parsed;
+      }
+    }
+  }
+
   /// Build reaction pills for a message
   Widget _buildReactionPills(int messageId) {
     final reactions = _messageReactions[messageId];
@@ -15983,19 +15984,20 @@ class _ChatScreenState extends State<ChatScreen>
     return filenamePattern.hasMatch(content.trim());
   }
 
-  /// Build message status indicator widget
+  /// Build message status indicator widget.
+  /// Colors mirror the web exactly (chat-global.js getStatusHtml): sent and
+  /// delivered are grey #999, seen is green #22c55e (single ✓ = sent, double
+  /// ✓✓ = delivered/seen).
   Widget _buildStatusIndicator(String status, [double scale = 1.0]) {
+    const statusGrey = Color(0xFF999999); // web #999
+    const seenGreen = Color(0xFF22C55E); // web #22c55e
     switch (status) {
       case 'sent':
-        return Icon(Icons.check, size: 16 * scale, color: Colors.white70);
+        return Icon(Icons.check, size: 16 * scale, color: statusGrey);
       case 'delivered':
-        return Icon(Icons.done_all, size: 16 * scale, color: Colors.white70);
+        return Icon(Icons.done_all, size: 16 * scale, color: statusGrey);
       case 'seen':
-        return Icon(
-          Icons.done_all,
-          size: 16 * scale,
-          color: const Color(0xFF00BCD4), // Cyan color like WhatsApp
-        );
+        return Icon(Icons.done_all, size: 16 * scale, color: seenGreen);
       case 'failed':
         return Icon(
           Icons.error_outline,
@@ -16003,7 +16005,8 @@ class _ChatScreenState extends State<ChatScreen>
           color: const Color(0xFFEF4444),
         );
       default:
-        return Icon(Icons.schedule, size: 16 * scale, color: Colors.white54);
+        // queued / sending / pending — web shows a clock here.
+        return Icon(Icons.schedule, size: 16 * scale, color: statusGrey);
     }
   }
 
