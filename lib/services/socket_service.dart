@@ -39,6 +39,7 @@ class SocketService {
   final Map<String, Function(Map<String, dynamic>)>
   _messageStatusUpdatedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _messagesReadListeners = {};
+  final Map<String, Function(Map<String, dynamic>)> _unreadClearedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _colorChangedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _colorResetListeners = {};
   final Map<String, Function(Map<String, dynamic>)>
@@ -192,6 +193,10 @@ class SocketService {
         break;
       case 'messagesRead':
         _messagesReadListeners[key] =
+            callback as Function(Map<String, dynamic>);
+        break;
+      case 'unreadCleared':
+        _unreadClearedListeners[key] =
             callback as Function(Map<String, dynamic>);
         break;
       case 'colorChanged':
@@ -427,6 +432,9 @@ class SocketService {
       case 'messagesRead':
         _messagesReadListeners.remove(key);
         break;
+      case 'unreadCleared':
+        _unreadClearedListeners.remove(key);
+        break;
       case 'colorChanged':
         _colorChangedListeners.remove(key);
         break;
@@ -592,6 +600,7 @@ class SocketService {
     _messageReadListeners.remove(key);
     _messageStatusUpdatedListeners.remove(key);
     _messagesReadListeners.remove(key);
+    _unreadClearedListeners.remove(key);
     _colorChangedListeners.remove(key);
     _colorResetListeners.remove(key);
     _groupColorChangedListeners.remove(key);
@@ -748,6 +757,9 @@ class SocketService {
   set onMessagesRead(Function(Map<String, dynamic>)? cb) => cb != null
       ? _messagesReadListeners[_dk] = cb
       : _messagesReadListeners.remove(_dk);
+  set onUnreadCleared(Function(Map<String, dynamic>)? cb) => cb != null
+      ? _unreadClearedListeners[_dk] = cb
+      : _unreadClearedListeners.remove(_dk);
   set onColorChanged(Function(Map<String, dynamic>)? cb) => cb != null
       ? _colorChangedListeners[_dk] = cb
       : _colorChangedListeners.remove(_dk);
@@ -1158,6 +1170,13 @@ class SocketService {
     _socket!.on('messages_read', (data) {
       debugPrint('✓✓ Messages read: $data');
       _broadcast(_messagesReadListeners, data as Map<String, dynamic>);
+    });
+
+    // Cross-device read sync: this account read a conversation on another
+    // device (e.g. the web app) — clear the local unread badge for that peer.
+    _socket!.on('unread_cleared', (data) {
+      debugPrint('🔄 Unread cleared on another device: $data');
+      _broadcast(_unreadClearedListeners, data as Map<String, dynamic>);
     });
 
     // All messages deleted event

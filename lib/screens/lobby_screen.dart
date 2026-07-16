@@ -579,6 +579,22 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       _handleReactionUpdated(data);
     });
 
+    // Cross-device read sync: conversation read on another device (web) —
+    // clear this peer's unread badge locally so it doesn't stay stale.
+    _socketService.addListener('unreadCleared', key, (
+      Map<String, dynamic> data,
+    ) {
+      _handleUnreadCleared(data);
+    });
+
+    // The peer read our messages - flip the lobby preview tick to the green
+    // "seen" state (web already does this; mobile stayed stuck on gray).
+    _socketService.addListener('messagesRead', key, (
+      Map<String, dynamic> data,
+    ) {
+      _handleMessagesRead(data);
+    });
+
     // Listen for file messages (incoming files from web)
     _socketService.addListener('fileReceived', key, (
       Map<String, dynamic> data,
@@ -1692,6 +1708,8 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       _lobbyUsers.insert(0, updatedUser);
       _updateFilteredLists();
     });
+    // Reconcile against server truth shortly after — heals any double-count.
+    _scheduleUnreadResync();
   }
 
   void _handleDoorbellRing(Map<String, dynamic> data) {
@@ -1734,7 +1752,11 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final normalizedType = _normalizedRealtimeType(data);
 
     if (explicitId != null) {
-      return '$normalizedType:$explicitId';
+      // Key on the message id ALONE: the server delivers the same persisted
+      // message over multiple event channels (voice_message + file_message,
+      // file_message + new_message, personal room + chat room). A type-prefixed
+      // key let each channel through once - doubling the unread badge.
+      return 'msg:$explicitId';
     }
 
     final senderId =
@@ -1869,6 +1891,8 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
         _updateFilteredLists();
       }
     });
+    // Reconcile against server truth shortly after — heals any double-count.
+    _scheduleUnreadResync();
   }
 
   void _handleSentMessage(Map<String, dynamic> data) {
@@ -2354,6 +2378,82 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     return hydratedUsers;
   }
 
+  void _handleMessagesRead(Map<String, dynamic> data) {
+    final readerId = _toInt(data['reader_id']);
+    if (readerId == null || !mounted) return;
+    final idx = _lobbyUsers.indexWhere((u) => u.id == readerId);
+    if (idx == -1) return;
+    final user = _lobbyUsers[idx];
+    if (user.lastMessageIsFromMe != true) return;
+    if (user.lastMessageStatus == 'seen') return;
+    setState(() {
+      _lobbyUsers[idx] = user.copyWith(lastMessageStatus: 'seen');
+      _updateFilteredLists();
+    });
+    debugPrint('[LOBBY] Peer $readerId read our messages - tick flipped to seen');
+  }
+
+  Timer? _unreadResyncTimer;
+
+  /// Server-authoritative unread re-sync. Local +1 bumps can drift (an event
+  /// delivered on two channels, FCM/socket overlap), so shortly after any bump
+  /// we reconcile every tile against the server's true per-sender counts.
+  void _scheduleUnreadResync() {
+    _unreadResyncTimer?.cancel();
+    _unreadResyncTimer = Timer(const Duration(milliseconds: 1500), () {
+      _resyncUnreadFromServer();
+    });
+  }
+
+  Future<void> _resyncUnreadFromServer() async {
+    try {
+      final token = await StorageService.getToken();
+      if (token == null || !mounted) return;
+      final res = await http.get(
+        Uri.parse(
+          '${ApiConfig.baseUrl}${ApiConfig.mobilePrefix}/messages/unread-summary',
+        ),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode != 200 || !mounted) return;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final summary = (body['unread_summary'] as List?) ?? const [];
+      final counts = <int, int>{};
+      for (final item in summary) {
+        if (item is! Map) continue;
+        final sid = _toInt(item['sender_id']);
+        final c = _toInt(item['count']);
+        if (sid != null && c != null) counts[sid] = c;
+      }
+      setState(() {
+        for (var i = 0; i < _lobbyUsers.length; i++) {
+          final u = _lobbyUsers[i];
+          final viewing = _currentlyViewingChatUserId == u.id;
+          final effective = viewing ? 0 : (counts[u.id] ?? 0);
+          if (u.unreadCount != effective) {
+            _lobbyUsers[i] = u.copyWith(unreadCount: effective);
+          }
+        }
+        _updateFilteredLists();
+      });
+    } catch (e) {
+      debugPrint('[LOBBY] unread resync failed: $e');
+    }
+  }
+
+  void _handleUnreadCleared(Map<String, dynamic> data) {
+    final peerId = _toInt(data['peer_id']);
+    if (peerId == null) return;
+    final idx = _lobbyUsers.indexWhere((u) => u.id == peerId);
+    if (idx == -1) return;
+    if (_lobbyUsers[idx].unreadCount == 0) return;
+    if (!mounted) return;
+    setState(() {
+      _lobbyUsers[idx] = _lobbyUsers[idx].copyWith(unreadCount: 0);
+    });
+    debugPrint('[LOBBY] Unread badge cleared for peer $peerId (read on another device)');
+  }
+
   String _previewTextForMessage(Message message) {
     switch (message.messageType.toLowerCase()) {
       case 'image':
@@ -2466,13 +2566,20 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
   Widget _draftAwarePreviewText(
     String roomKey,
     String fallbackText,
-    double fontSize,
-  ) {
+    double fontSize, {
+    bool emphasize = false,
+  }) {
     final draft = DraftService().getText(roomKey);
     if (draft.isEmpty) {
+      // Skype-style unread emphasis: an unread incoming preview must not look
+      // "read" — render it bright + semibold until the conversation is opened.
       return Text(
         fallbackText,
-        style: TextStyle(color: Colors.grey[400], fontSize: fontSize),
+        style: TextStyle(
+          color: emphasize ? Colors.white : Colors.grey[400],
+          fontWeight: emphasize ? FontWeight.w600 : FontWeight.normal,
+          fontSize: fontSize,
+        ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       );
@@ -4537,6 +4644,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
                                   roomKey,
                                   _getLastMessagePreview(),
                                   12 * s,
+                                  emphasize: displayUnreadCount > 0,
                                 );
                                 // Only show a delivery tick for our own last
                                 // message, and never while a draft is pending.

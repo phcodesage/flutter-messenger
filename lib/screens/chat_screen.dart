@@ -3178,33 +3178,44 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   void _syncColorFromMessages(List<Message> messages) {
+    // Pick the LATEST color event by message id — callers pass lists in
+    // different orders (cache oldest-first, server pages newest-first), and the
+    // old first-match scan re-applied the OLDEST color in history on every
+    // room open instead of the most recent change/reset.
+    Message? latest;
     for (final msg in messages) {
-      if (msg.messageType == 'color_change') {
-        final colorHex = msg.content;
-        try {
-          final hexColor = colorHex.replaceAll('#', '');
-          final color = Color(int.parse('FF$hexColor', radix: 16));
-          if (mounted) {
-            setState(() {
-              _headerColor = color;
-              _showResetButton = true;
-            });
-          }
-          _saveChatColor(colorHex);
-        } catch (e) {
-          debugPrint('Error parsing color from history: $e');
+      if (msg.messageType == 'color_change' ||
+          msg.messageType == 'color_reset') {
+        if (latest == null || msg.id > latest.id) {
+          latest = msg;
         }
-        return; // found the latest, stop scanning
-      } else if (msg.messageType == 'color_reset') {
+      }
+    }
+    if (latest == null) return;
+
+    if (latest.messageType == 'color_change') {
+      final colorHex = latest.content;
+      try {
+        final hexColor = colorHex.replaceAll('#', '');
+        final color = Color(int.parse('FF$hexColor', radix: 16));
         if (mounted) {
           setState(() {
-            _headerColor = const Color(0xFF121212);
-            _showResetButton = false;
+            _headerColor = color;
+            _showResetButton = true;
           });
         }
-        _saveChatColor('#121212');
-        return; // found the latest, stop scanning
+        _saveChatColor(colorHex);
+      } catch (e) {
+        debugPrint('Error parsing color from history: $e');
       }
+    } else {
+      if (mounted) {
+        setState(() {
+          _headerColor = const Color(0xFF121212);
+          _showResetButton = false;
+        });
+      }
+      _saveChatColor('#121212');
     }
   }
 
