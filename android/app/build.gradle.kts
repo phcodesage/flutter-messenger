@@ -67,8 +67,17 @@ android {
         versionName = flutter.versionName
 
         // Expose BASE_URL to native Kotlin code via BuildConfig.BASE_URL.
-        // Falls back to the same default as api_config.dart when no dart-define is present.
-        val baseUrl = dartEnv["BASE_URL"] ?: "https://web.flask-call-app.site/"
+        // api_config.dart is the single source of truth: read its defaultValue
+        // at build time so the native (quick-reply) side can never drift from
+        // the Dart side. A BASE_URL dart-define still wins if explicitly given,
+        // because then the Dart side uses it too.
+        val apiConfigDefault = file("../../lib/config/api_config.dart")
+            .readLines()
+            .firstOrNull { it.trimStart().startsWith("defaultValue:") }
+            ?.let { Regex("'([^']+)'").find(it)?.groupValues?.get(1) }
+        val baseUrl = dartEnv["BASE_URL"]
+            ?: apiConfigDefault
+            ?: throw GradleException("Could not read BASE_URL defaultValue from lib/config/api_config.dart")
         buildConfigField("String", "BASE_URL", "\"$baseUrl\"")
     }
 

@@ -595,6 +595,14 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       _handleMessagesRead(data);
     });
 
+    // Someone (possibly me on another device) changed username/avatar —
+    // refresh their lobby tile in place.
+    _socketService.addRawListener('user_profile_updated', key, (dynamic data) {
+      if (data is Map) {
+        _handleProfileUpdated(Map<String, dynamic>.from(data));
+      }
+    });
+
     // Listen for file messages (incoming files from web)
     _socketService.addListener('fileReceived', key, (
       Map<String, dynamic> data,
@@ -2376,6 +2384,40 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       lastMessageIsFromMe: true,
     );
     return hydratedUsers;
+  }
+
+  void _handleProfileUpdated(Map<String, dynamic> data) {
+    final userId = _toInt(data['user_id']);
+    if (userId == null || !mounted) return;
+    // If it's me (changed on web or another device), keep the local profile
+    // cache in sync so the Settings modal shows the fresh values.
+    if (userId == _socketService.currentUserId) {
+      final username = data['username'] as String?;
+      if (username != null && username.isNotEmpty) {
+        StorageService.saveUsername(username);
+      }
+      final avatarUrl = data['avatar_url'] as String?;
+      SharedPreferences.getInstance().then((sp) {
+        if (avatarUrl != null && avatarUrl.isNotEmpty) {
+          sp.setString('my_avatar_url', avatarUrl);
+        } else {
+          sp.remove('my_avatar_url');
+        }
+      });
+    }
+    final idx = _lobbyUsers.indexWhere((u) => u.id == userId);
+    if (idx == -1) return;
+    final u = _lobbyUsers[idx];
+    setState(() {
+      _lobbyUsers[idx] = u.copyWith(
+        username: data['username'] as String? ?? u.username,
+        fullName: data['full_name'] as String? ?? u.fullName,
+        firstName: data['first_name'] as String? ?? u.firstName,
+        lastName: data['last_name'] as String? ?? u.lastName,
+        avatarUrl: data['avatar_url'] as String? ?? u.avatarUrl,
+      );
+      _updateFilteredLists();
+    });
   }
 
   void _handleMessagesRead(Map<String, dynamic> data) {

@@ -33,6 +33,10 @@ class ApiConfig {
   static const String sendManyMessagesUrl =
       '$baseUrl$mobilePrefix/messages/send-many';
   static const String markReadUrl = '$baseUrl$mobilePrefix/messages/mark-read';
+  static const String profileUrl = '$baseUrl$mobilePrefix/profile';
+  static const String profileUsernameUrl =
+      '$baseUrl$mobilePrefix/profile/username';
+  static const String profileAvatarUrl = '$baseUrl$mobilePrefix/profile/avatar';
   static const String presenceStatusUrl =
       '$baseUrl$mobilePrefix/presence/status';
   static const String heartbeatUrl = '$baseUrl$mobilePrefix/presence/heartbeat';
