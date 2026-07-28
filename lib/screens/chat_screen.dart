@@ -78,6 +78,8 @@ import 'media_gallery_viewer.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import '../services/forward_service.dart';
 import '../widgets/forward_recipient_picker.dart';
+import '../services/excalidraw_rooms_service.dart';
+import '../widgets/excalidraw_rooms_section.dart';
 
 /// Chat screen for messaging with a specific user
 class ChatScreen extends StatefulWidget {
@@ -218,6 +220,12 @@ class _ChatScreenState extends State<ChatScreen>
 
   List<Message> _messages = [];
   List<Map<String, dynamic>> _pinnedExcalidrawLinks = [];
+
+  /// Self-hosted whiteboards for this conversation. The count feeds the header
+  /// badge so the other side knows a board was added or renamed.
+  int _excalidrawRoomsUnread = 0;
+  final GlobalKey<ExcalidrawRoomsSectionState> _excalRoomsSectionKey =
+      GlobalKey<ExcalidrawRoomsSectionState>();
   bool _isLoading = true;
   bool _isLoadingMessages = false; // Guard against concurrent message loads
   bool _isLoadingMore = false; // Guard against concurrent "load more" calls
@@ -1054,6 +1062,7 @@ class _ChatScreenState extends State<ChatScreen>
     unawaited(_loadAutoCorrectionPreferences());
     unawaited(_loadStampPreference());
     unawaited(_loadPinnedExcalidrawLinks());
+    unawaited(_refreshExcalidrawRoomsUnread());
 
     // Load common phrases in background
     unawaited(_loadCommonPhrases());
@@ -1958,6 +1967,13 @@ class _ChatScreenState extends State<ChatScreen>
       Map<String, dynamic> data,
     ) {
       _handleExcalidrawPinned(data);
+    });
+
+    // A whiteboard was created, renamed or deleted by someone in this chat.
+    _socketService.addListener('excalidrawRoomChanged', key, (
+      Map<String, dynamic> data,
+    ) {
+      _handleExcalidrawRoomChanged(data);
     });
 
     // Listen for excalidraw unpinned event
@@ -3272,6 +3288,41 @@ class _ChatScreenState extends State<ChatScreen>
       widget.otherUser.id,
       _messages.reversed.toList(),
     );
+  }
+
+  /// Conversation this chat's whiteboards belong to. Built from the sorted
+  /// participant pair so both sides derive the same key and see the same
+  /// boards — deriving it from anything else is how they went missing on web.
+  String? get _excalidrawConversationKey {
+    final me = _currentUserId;
+    if (me == null) return null;
+    return ExcalidrawRoomsService.dmKey(me, widget.otherUser.id);
+  }
+
+  /// A board in some conversation changed. Only this chat's own boards matter
+  /// here; other chats are recounted when they are opened.
+  void _handleExcalidrawRoomChanged(Map<String, dynamic> data) {
+    final key = _excalidrawConversationKey;
+    if (key == null || data['conversation_key'] != key) return;
+
+    // If the modal is on screen, refresh it in place; either way the badge
+    // has to be recounted.
+    _excalRoomsSectionKey.currentState?.reload();
+
+    final actorId = (data['actor_id'] as num?)?.toInt();
+    if (actorId != null && actorId == _currentUserId) return;
+    unawaited(_refreshExcalidrawRoomsUnread());
+  }
+
+  /// Recount boards changed since this chat's Excalidraw modal was last opened.
+  Future<void> _refreshExcalidrawRoomsUnread() async {
+    final key = _excalidrawConversationKey;
+    if (key == null) return;
+    final count = await ExcalidrawRoomsService.unreadCount(key);
+    if (!mounted || key != _excalidrawConversationKey) return;
+    if (count != _excalidrawRoomsUnread) {
+      setState(() => _excalidrawRoomsUnread = count);
+    }
   }
 
   Future<void> _loadPinnedExcalidrawLinks() async {
@@ -11721,7 +11772,10 @@ class _ChatScreenState extends State<ChatScreen>
           partnerStatus: _getEffectivePartnerStatus(),
           partnerLastSeen: _formattedPartnerLastSeen(),
           taskCount: _taskMessages.where((m) => m.isTask).length,
-          excalidrawCount: _pinnedExcalidrawLinks.length,
+          // Pinned links and unread board changes share one badge because they
+          // share one modal — the number is "things waiting in here".
+          excalidrawCount:
+              _pinnedExcalidrawLinks.length + _excalidrawRoomsUnread,
           scale: scale,
           onBack: widget.embedded ? null : () => Navigator.pop(context),
           onUserProfile: _showUserProfile,
@@ -14727,6 +14781,15 @@ class _ChatScreenState extends State<ChatScreen>
     final excalidrawLinks = List<Map<String, dynamic>>.from(
       _pinnedExcalidrawLinks,
     );
+
+    // Opening is the read receipt for board changes.
+    final conversationKey = _excalidrawConversationKey;
+    if (conversationKey != null) {
+      unawaited(ExcalidrawRoomsService.markSeen(conversationKey));
+      if (_excalidrawRoomsUnread != 0) {
+        setState(() => _excalidrawRoomsUnread = 0);
+      }
+    }
     final mediaQuery = MediaQuery.of(context);
     final topOffset = mediaQuery.padding.top + kToolbarHeight + 6;
     final availableHeight = mediaQuery.size.height - topOffset - 10;
@@ -14872,7 +14935,43 @@ class _ChatScreenState extends State<ChatScreen>
                         height: 1,
                       ),
                       Flexible(
-                        child: excalidrawLinks.isEmpty
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Boards hosted by us, scoped to this chat.
+                              ExcalidrawRoomsSection(
+                                key: _excalRoomsSectionKey,
+                                conversationKey: _excalidrawConversationKey,
+                                myUserId: _currentUserId,
+                                onCountChanged: _refreshExcalidrawRoomsUnread,
+                              ),
+                              Divider(
+                                color: Colors.white.withValues(alpha: 0.08),
+                                height: 1,
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.fromLTRB(14, 14, 14, 0),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.push_pin_outlined,
+                                      color: Color(0xFFF97316),
+                                      size: 17,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Pinned links',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              excalidrawLinks.isEmpty
                             ? Center(
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
@@ -14920,6 +15019,10 @@ class _ChatScreenState extends State<ChatScreen>
                               )
                             : ListView.builder(
                                 padding: const EdgeInsets.all(10),
+                                // Nested inside the modal's scroll view now
+                                // that boards share the space above it.
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
                                 itemCount: excalidrawLinks.length,
                                 itemBuilder: (context, index) {
                                   final link = excalidrawLinks[index];
@@ -15141,6 +15244,9 @@ class _ChatScreenState extends State<ChatScreen>
                                   );
                                 },
                               ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),

@@ -35,6 +35,8 @@ Key cross-cutting pieces:
 - **`main.dart`** — ordered async init (storage → cache → upload retry → share/shortcut intents → alarms → auth/home resolution); preserve ordering when adding bootstrap steps.
 - Notifications/alarms sync backend state to device-local scheduling (`alarm_notification_service.dart`, `firebase_messaging_service.dart`); Android quick-reply and notification routing go through MethodChannels named `com.example.flutter_messenger_v2/*`.
 
+- **Excalidraw whiteboards** — two different things share one modal and one header badge. *Pinned links* are chat messages someone highlighted (`/api/mobile/messages/excalidraw/...`). *Boards* are whiteboards hosted by the Flask backend itself (`excalidraw_rooms_service.dart` → `/api/excalidraw/rooms-list`, outside `/api/mobile`, same Bearer token). Boards are scoped to one conversation by a key that must be **the sorted participant pair** (`dm:<lo>-<hi>`) or `group:<id>` — derive it any other way and the two sides of a chat file boards in different places and see none of each other's. Changes arrive over the `excalidraw_room_created/updated/deleted` socket events. Opening a board launches the browser; the room key stays in the URL fragment and never reaches the server.
+
 Feature specs worth reading when relevant: @POMODORO_RULES.md and @BUILD_AND_TEST.md (WebRTC screen-share testing).
 
 ## Conventions

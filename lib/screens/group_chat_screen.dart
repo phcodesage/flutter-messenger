@@ -53,6 +53,8 @@ import 'chat/chat_composer_panel.dart';
 import 'media_gallery_viewer.dart';
 import '../utils/chat_exporter.dart';
 import '../utils/file_saver.dart';
+import '../services/excalidraw_rooms_service.dart';
+import '../widgets/excalidraw_rooms_section.dart';
 
 /// Group chat screen for messaging in a group
 class GroupChatScreen extends StatefulWidget {
@@ -84,6 +86,35 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   bool _isLoading = true;
   bool _isLoadingMessages = false;
   int? _currentUserId;
+
+  /// Self-hosted whiteboards for this group. The unread count rides on the
+  /// header's Excalidraw badge, next to the pinned-link count.
+  int _excalidrawRoomsUnread = 0;
+  final GlobalKey<ExcalidrawRoomsSectionState> _excalRoomsSectionKey =
+      GlobalKey<ExcalidrawRoomsSectionState>();
+
+  String get _excalidrawConversationKey =>
+      ExcalidrawRoomsService.groupKey(widget.group.id);
+
+  /// Recount boards changed since this group's Excalidraw modal was opened.
+  Future<void> _refreshExcalidrawRoomsUnread() async {
+    final count = await ExcalidrawRoomsService.unreadCount(
+      _excalidrawConversationKey,
+    );
+    if (!mounted) return;
+    if (count != _excalidrawRoomsUnread) {
+      setState(() => _excalidrawRoomsUnread = count);
+    }
+  }
+
+  /// A board changed somewhere; only this group's own boards matter here.
+  void _handleExcalidrawRoomChanged(Map<String, dynamic> data) {
+    if (data['conversation_key'] != _excalidrawConversationKey) return;
+    _excalRoomsSectionKey.currentState?.reload();
+    final actorId = (data['actor_id'] as num?)?.toInt();
+    if (actorId != null && actorId == _currentUserId) return;
+    unawaited(_refreshExcalidrawRoomsUnread());
+  }
 
   // Scroll to bottom button state
   bool _isAtBottom = true;
@@ -233,6 +264,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _currentUserId = await StorageService.getUserId();
     _currentUserIsAdmin = await StorageService.getIsAdmin();
     debugPrint('🎨 [INIT] Current user ID: $_currentUserId');
+    unawaited(_refreshExcalidrawRoomsUnread());
     unawaited(
       FirebaseMessagingService.instance.clearConversationNotificationState(
         groupId: widget.group.id,
@@ -536,6 +568,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     // Debug: Test response listener (commented out to reduce noise)
     /*
+    // A whiteboard was created, renamed or deleted in a conversation we are in.
+    _socketService.addListener('excalidrawRoomChanged', key, (data) {
+      _handleExcalidrawRoomChanged(data);
+    });
+
     _socketService.addListener('test_response', key, (data) {
       debugPrint('🧪 [TEST RESPONSE] Received in group chat screen: $data');
       debugPrint(
@@ -2298,7 +2335,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         onCallAudio: () => _startGroupCall('audio'),
         taskCount: taskCount,
         onShowTasks: _showGroupTasksModal,
-        excalidrawCount: excalidrawCount,
+        // Pinned links and unread board changes share one badge because they
+        // share one modal.
+        excalidrawCount: excalidrawCount + _excalidrawRoomsUnread,
         onShowExcalidraw: _showGroupExcalidrawModal,
         onShowMembers: _showGroupMembersSheet,
         onShowSettings: _showGroupSettingsSheet,
@@ -6777,6 +6816,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Centered dialog listing pinned Excalidraw links in this group matching 1on1 chat.
   void _showGroupExcalidrawModal() {
+    // Opening is the read receipt for board changes.
+    unawaited(ExcalidrawRoomsService.markSeen(_excalidrawConversationKey));
+    if (_excalidrawRoomsUnread != 0) {
+      setState(() => _excalidrawRoomsUnread = 0);
+    }
     final mediaQuery = MediaQuery.of(context);
     final topOffset = mediaQuery.padding.top + kToolbarHeight + 6;
     final availableHeight = mediaQuery.size.height - topOffset - 10;
@@ -6936,7 +6980,47 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                             height: 1,
                           ),
                           Flexible(
-                            child: pinned.isEmpty
+                            child: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Boards hosted by us, scoped to this group.
+                                  ExcalidrawRoomsSection(
+                                    key: _excalRoomsSectionKey,
+                                    conversationKey:
+                                        ExcalidrawRoomsService.groupKey(
+                                          widget.group.id,
+                                        ),
+                                    myUserId: _currentUserId,
+                                    onCountChanged:
+                                        _refreshExcalidrawRoomsUnread,
+                                  ),
+                                  Divider(
+                                    color: Colors.white.withValues(alpha: 0.08),
+                                    height: 1,
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.fromLTRB(14, 14, 14, 0),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.push_pin_outlined,
+                                          color: Color(0xFFF97316),
+                                          size: 17,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Pinned links',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  pinned.isEmpty
                                 ? Center(
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
@@ -6984,6 +7068,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                   )
                                 : ListView.builder(
                                     padding: const EdgeInsets.all(10),
+                                    // Nested in the modal's scroll view now.
+                                    shrinkWrap: true,
+                                    physics:
+                                        const NeverScrollableScrollPhysics(),
                                     itemCount: pinned.length,
                                     itemBuilder: (context, index) {
                                       final m = pinned[index];
@@ -7211,6 +7299,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       );
                                     },
                                   ),
+                                ],
+                              ),
+                            ),
                           ),
                         ],
                       ),

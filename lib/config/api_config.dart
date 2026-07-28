@@ -81,6 +81,29 @@ class ApiConfig {
   static String getExcalidrawBoardUrl(String boardId) =>
       '$baseUrl$mobilePrefix/excalidraw/boards/$boardId';
 
+  // Self-hosted Excalidraw whiteboards ("rooms"). These live on the web
+  // blueprint rather than /api/mobile, and accept the same Bearer token.
+  //
+  // `baseUrl` carries a trailing slash, which the '$baseUrl$prefix' pattern
+  // above turns into '//api/...'. Werkzeug does not treat that as the same
+  // path, so these build from a normalised origin instead.
+  static String get origin => baseUrl.endsWith('/')
+      ? baseUrl.substring(0, baseUrl.length - 1)
+      : baseUrl;
+
+  static String getExcalidrawRoomsUrl(String conversationKey) =>
+      '$origin/api/excalidraw/rooms-list'
+      '?conversation=${Uri.encodeComponent(conversationKey)}';
+  static String get excalidrawRoomsBaseUrl =>
+      '$origin/api/excalidraw/rooms-list';
+  static String getExcalidrawRoomEntryUrl(int entryId) =>
+      '$origin/api/excalidraw/rooms-list/$entryId';
+
+  /// Where a board is opened: the room key rides in the URL fragment, exactly
+  /// as the web client builds it, so the server never sees it.
+  static String getExcalidrawBoardLink(String roomId, String roomKey) =>
+      '$origin/excalidraw/#room=$roomId,$roomKey';
+
   // Group endpoints
   static const String groupsUrl = '$baseUrl$mobilePrefix/groups';
   static String getGroupUrl(int groupId) =>

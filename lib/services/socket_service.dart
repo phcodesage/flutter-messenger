@@ -64,6 +64,11 @@ class SocketService {
       {};
   final Map<String, Function(Map<String, dynamic>)>
   _excalidrawUnpinnedListeners = {};
+
+  /// Whiteboard directory changes (created / renamed / deleted). One channel
+  /// for all three: every listener re-reads the list anyway.
+  final Map<String, Function(Map<String, dynamic>)>
+  _excalidrawRoomChangedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _reactionUpdatedListeners =
       {};
   final Map<String, Function(Map<String, dynamic>)> _reactionClearedListeners =
@@ -254,6 +259,10 @@ class SocketService {
         break;
       case 'excalidrawUnpinned':
         _excalidrawUnpinnedListeners[key] =
+            callback as Function(Map<String, dynamic>);
+        break;
+      case 'excalidrawRoomChanged':
+        _excalidrawRoomChangedListeners[key] =
             callback as Function(Map<String, dynamic>);
         break;
       case 'reactionUpdated':
@@ -480,6 +489,9 @@ class SocketService {
       case 'excalidrawUnpinned':
         _excalidrawUnpinnedListeners.remove(key);
         break;
+      case 'excalidrawRoomChanged':
+        _excalidrawRoomChangedListeners.remove(key);
+        break;
       case 'reactionUpdated':
         _reactionUpdatedListeners.remove(key);
         break;
@@ -615,6 +627,7 @@ class SocketService {
     _taskUncompletedListeners.remove(key);
     _excalidrawPinnedListeners.remove(key);
     _excalidrawUnpinnedListeners.remove(key);
+    _excalidrawRoomChangedListeners.remove(key);
     _reactionUpdatedListeners.remove(key);
     _reactionClearedListeners.remove(key);
     _incomingCallListeners.remove(key);
@@ -1320,6 +1333,22 @@ class SocketService {
       debugPrint('📌 Excalidraw link unpinned: $data');
       _broadcast(_excalidrawUnpinnedListeners, data as Map<String, dynamic>);
     });
+
+    // Self-hosted whiteboard directory changed somewhere in a conversation we
+    // belong to. Payload carries conversation_key, actor_id and the room row.
+    for (final event in const [
+      'excalidraw_room_created',
+      'excalidraw_room_updated',
+      'excalidraw_room_deleted',
+    ]) {
+      _socket!.on(event, (data) {
+        if (data is! Map) return;
+        debugPrint('🖊️ $event: $data');
+        final payload = Map<String, dynamic>.from(data);
+        payload['event'] = event;
+        _broadcast(_excalidrawRoomChangedListeners, payload);
+      });
+    }
 
     // === Call-related events ===
 
