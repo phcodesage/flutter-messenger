@@ -55,6 +55,7 @@ import '../utils/chat_exporter.dart';
 import '../utils/file_saver.dart';
 import '../services/excalidraw_rooms_service.dart';
 import '../widgets/excalidraw_rooms_section.dart';
+import 'excalidraw_board_screen.dart';
 
 /// Group chat screen for messaging in a group
 class GroupChatScreen extends StatefulWidget {
@@ -2927,6 +2928,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       end--;
     }
     return url.substring(0, end);
+  }
+
+  /// Open a drawing in the in-app board screen rather than the system browser.
+  ///
+  /// Only for boards on our own backend: those are login-gated, and the WebView
+  /// is the only place the app's JWT can establish a session. A link to
+  /// excalidraw.com is somebody else's site, so it goes out as a normal link.
+  void _openExcalidrawUrl(String rawUrl) {
+    final normalized = rawUrl.toLowerCase().startsWith('http')
+        ? rawUrl
+        : 'https://$rawUrl';
+
+    if (!normalized.startsWith(ApiConfig.origin)) {
+      unawaited(_openMessageUrl(rawUrl));
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ExcalidrawBoardScreen(url: normalized),
+      ),
+    );
   }
 
   Future<void> _openMessageUrl(String url) async {
@@ -7098,7 +7121,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       final openLink = () {
                                         Navigator.pop(context);
                                         if (extractedUrl != null) {
-                                          _openMessageUrl(extractedUrl);
+                                          _openExcalidrawUrl(extractedUrl);
                                         }
                                       };
                                       return Container(

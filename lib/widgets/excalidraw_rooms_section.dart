@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/excalidraw_room.dart';
+import '../screens/excalidraw_board_screen.dart';
 import '../services/excalidraw_rooms_service.dart';
 
 /// The "Boards" half of the Excalidraw modal: whiteboards hosted by our own
@@ -183,13 +183,17 @@ class ExcalidrawRoomsSectionState extends State<ExcalidrawRoomsSection> {
   }
 
   Future<void> _open(ExcalidrawRoom room) async {
-    final url = Uri.parse(ExcalidrawRoomsService.boardUrl(room));
-    // External browser: the board is a full web app, and the room key rides in
-    // the fragment so it never leaves the URL.
-    final launched = await launchUrl(url, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      setState(() => _error = 'Could not open the board.');
-    }
+    // In-app, not the system browser: the WebView carries the JWT on the first
+    // request and keeps the resulting session, which an external browser has no
+    // way to do.
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ExcalidrawBoardScreen(
+          url: ExcalidrawRoomsService.boardUrl(room),
+          title: room.title,
+        ),
+      ),
+    );
   }
 
   String _message(Object error) =>

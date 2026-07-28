@@ -129,6 +129,10 @@ dependencies:
   # Video player controls UI
   chewie: ^1.8.0
 
+  # In-app browser for Excalidraw boards (kept in-app so the drawing keeps the
+  # session and the room key never leaves for an external browser)
+  webview_flutter: ^4.10.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
