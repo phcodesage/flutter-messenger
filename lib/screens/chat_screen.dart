@@ -480,6 +480,7 @@ class _ChatScreenState extends State<ChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _seedMessagesFromWarmCache();
     // Seed from the app-wide cache so the first keyboard open snaps instantly.
     if (_lastKnownKeyboardInsetGlobal > 0) {
       _lastKnownKeyboardInset = _lastKnownKeyboardInsetGlobal;
@@ -1019,6 +1020,34 @@ class _ChatScreenState extends State<ChatScreen>
     if (_messageController.selection != restoredSelection) {
       _messageController.selection = restoredSelection;
     }
+  }
+
+  /// Paint the conversation on the very first frame when the lobby (or a
+  /// previous visit) already warmed it. Everything else here runs behind an
+  /// await — reading the user id, opening the room, reading Hive — so without
+  /// this the room appears as a spinner and then visibly fills in. The async
+  /// path in [_loadCachedMessages] still runs and supersedes this with the full
+  /// history; this only removes the empty frames at the start.
+  void _seedMessagesFromWarmCache() {
+    final currentUserId = _socketService.currentUserId;
+    if (currentUserId == null) return;
+
+    final warm = ChatCacheService.peekConversationMessages(
+      currentUserId,
+      widget.otherUser.id,
+    );
+    if (warm == null || warm.isEmpty) return;
+
+    _currentUserId = currentUserId;
+    _messages = warm.reversed.toList();
+    _databaseLoadedMessageIds
+      ..clear()
+      ..addAll(warm.where((m) => m.id > 0).map((m) => m.id));
+    _hydrateReactionsForMessages(_messages);
+    _isLoading = false;
+    debugPrint(
+      '[CHAT] Painted ${_messages.length} messages from warm cache on first frame',
+    );
   }
 
   Future<void> _initialize() async {

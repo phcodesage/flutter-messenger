@@ -311,6 +311,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _messageController.addListener(_onComposerTextChangedForDraft);
     _loadDraftIntoComposer();
 
+    _seedMessagesFromWarmCache();
     _initialize();
 
     // Set this group as active to prevent FCM notifications
@@ -492,6 +493,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         debugPrint('Error parsing group theme color from history: $e');
       }
     }
+  }
+
+  /// Paint the group on the very first frame when its cache is already warm
+  /// (preloaded from the groups list, or left over from a previous visit).
+  /// [_loadCachedGroupMessages] runs behind an await, so on its own it still
+  /// leaves a shimmer frame or two before the messages appear.
+  void _seedMessagesFromWarmCache() {
+    final warm = ChatCacheService.peekGroupMessages(widget.group.id);
+    if (warm == null || warm.isEmpty) return;
+
+    _messages = List<GroupMessage>.from(warm);
+    _isLoading = false;
+    debugPrint(
+      '[GROUP CHAT] Painted ${_messages.length} messages from warm cache on first frame',
+    );
   }
 
   /// Mirrors the 1:1 chat's `_loadCachedMessages` so reopening a group feels

@@ -2232,6 +2232,7 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       if (userId != null) {
         await ChatCacheService.saveLobbyUsers(userId, users);
         await ChatCacheService.saveGroups(userId, results[1] as List<Group>);
+        unawaited(_preloadTopConversations(userId, users, groups));
       }
       // Refresh AI chat presence so its tile sorts correctly with fresh server data
       _loadAiSessionPresence();
@@ -2252,6 +2253,31 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Decode the cached tail of the conversations most likely to be opened next,
+  /// so tapping one paints instantly instead of showing a spinner while its
+  /// cache is read and decoded. The list is already sorted by recent activity,
+  /// so the head of it is the right set to warm.
+  ///
+  /// Yields between conversations so this never competes with the frame that
+  /// just rendered the lobby.
+  Future<void> _preloadTopConversations(
+    int userId,
+    List<LobbyUser> users,
+    List<Group> groups,
+  ) async {
+    const preloadCount = 8;
+    for (final user in users.take(preloadCount)) {
+      if (!mounted) return;
+      await ChatCacheService.preloadConversation(userId, user.id);
+      await Future<void>.delayed(Duration.zero);
+    }
+    for (final group in groups.take(preloadCount)) {
+      if (!mounted) return;
+      await ChatCacheService.preloadGroup(group.id);
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
   Future<void> _loadAiSessionPresence() async {
     final userId = await StorageService.getUserId();
     if (userId == null) {
@@ -2265,6 +2291,13 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     final String? aiLastMessagePreview = prefs.getString(
       'ai_last_message_preview_$userId',
     );
+
+    // Warm the AI conversation while we're already holding the user id, so the
+    // AI room paints on entry like any other chat.
+    final aiSessionId = await StorageService.getAiSessionId(userId);
+    if (aiSessionId != null) {
+      unawaited(ChatCacheService.preloadAiSession(userId, aiSessionId));
+    }
 
     if (!mounted) return;
     setState(() {

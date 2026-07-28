@@ -16,6 +16,30 @@ class ChatCacheService {
   static const _maxMessagesPerThread = 1000; // Increased from 200
   static const _maxLobbyEntries = 100;
 
+  /// How many conversations keep a decoded copy in memory, and how many of
+  /// their newest messages. Hive reads are synchronous, but the JSON→Message
+  /// decode is not free and every caller still has to `await` — which pushes
+  /// the first paint past the frame the route appears on, so you see a spinner
+  /// before the messages land. Memoising the decoded tail lets a warmed
+  /// conversation be read synchronously, so the chat opens already populated.
+  /// The tail is only what fills a screen; the full history still arrives from
+  /// [loadConversationMessages] a moment later.
+  static const _maxMemoConversations = 12;
+  static const _maxMemoMessages = 80;
+  static final Map<String, List<Message>> _conversationMemo = {};
+  static final List<String> _memoOrder = [];
+
+  static void _rememberConversation(String key, List<Message> messages) {
+    _conversationMemo[key] = messages.length > _maxMemoMessages
+        ? messages.sublist(messages.length - _maxMemoMessages)
+        : List<Message>.from(messages);
+    _memoOrder.remove(key);
+    _memoOrder.add(key);
+    while (_memoOrder.length > _maxMemoConversations) {
+      _conversationMemo.remove(_memoOrder.removeAt(0));
+    }
+  }
+
   static bool _initialized = false;
   static late Box _chatBox;
   static late Box _lobbyBox;
@@ -66,6 +90,10 @@ class ChatCacheService {
 
     final cachedMessages = capped.map((m) => _stripFileData(m)).toList();
 
+    // Keep the in-memory tail in step with disk so leaving and re-entering a
+    // chat paints the messages you just saw, not a stale snapshot.
+    _rememberConversation(key, cachedMessages);
+
     await _chatBox.put(key, {
       'messages': cachedMessages.map((m) => m.toJson()).toList(),
       'updated_at': DateTime.now().toIso8601String(),
@@ -110,6 +138,43 @@ class ChatCacheService {
     }
   }
 
+  /// Synchronously read the decoded tail of a conversation, if it has been
+  /// warmed by a previous load/save or by [preloadConversation].
+  ///
+  /// Returns null on a miss — callers must fall back to the async
+  /// [loadConversationMessages]. The point of this is the first frame: a chat
+  /// screen can seed its list in initState and paint messages immediately
+  /// instead of showing a spinner while an await resolves.
+  ///
+  /// Ordered oldest → newest, matching [loadConversationMessages].
+  static List<Message>? peekConversationMessages(
+    int currentUserId,
+    int otherUserId,
+  ) {
+    final cached = _conversationMemo[_conversationKey(
+      currentUserId,
+      otherUserId,
+    )];
+    if (cached == null || cached.isEmpty) return null;
+    return List<Message>.unmodifiable(cached);
+  }
+
+  /// Warm the in-memory tail for a conversation without needing its screen.
+  /// Called from the lobby so the conversations a user is most likely to open
+  /// are already decoded by the time they tap one.
+  static Future<void> preloadConversation(
+    int currentUserId,
+    int otherUserId,
+  ) async {
+    if (!_initialized) return;
+    if (_conversationMemo.containsKey(
+      _conversationKey(currentUserId, otherUserId),
+    )) {
+      return;
+    }
+    await loadConversationMessages(currentUserId, otherUserId);
+  }
+
   /// Retrieve cached messages for a conversation.
   /// Returns messages immediately for offline access.
   static Future<List<Message>> loadConversationMessages(
@@ -134,9 +199,41 @@ class ChatCacheService {
     final rawList = (data['messages'] as List?) ?? const [];
     debugPrint('📦 Cache has ${rawList.length} messages');
 
-    return rawList
+    final decoded = rawList
         .map((item) => Message.fromJson(Map<String, dynamic>.from(item as Map)))
         .toList();
+    _rememberConversation(key, decoded);
+    return decoded;
+  }
+
+  /// Decoded tails for groups, same purpose and bounds as [_conversationMemo].
+  static final Map<int, List<GroupMessage>> _groupMemo = {};
+  static final List<int> _groupMemoOrder = [];
+
+  static void _rememberGroup(int groupId, List<GroupMessage> messages) {
+    _groupMemo[groupId] = messages.length > _maxMemoMessages
+        ? messages.sublist(messages.length - _maxMemoMessages)
+        : List<GroupMessage>.from(messages);
+    _groupMemoOrder.remove(groupId);
+    _groupMemoOrder.add(groupId);
+    while (_groupMemoOrder.length > _maxMemoConversations) {
+      _groupMemo.remove(_groupMemoOrder.removeAt(0));
+    }
+  }
+
+  /// Synchronously read a group's warmed message tail, or null on a miss.
+  /// See [peekConversationMessages] for why this exists.
+  static List<GroupMessage>? peekGroupMessages(int groupId) {
+    final cached = _groupMemo[groupId];
+    if (cached == null || cached.isEmpty) return null;
+    return List<GroupMessage>.unmodifiable(cached);
+  }
+
+  /// Warm a group's in-memory tail ahead of the user opening it.
+  static Future<void> preloadGroup(int groupId) async {
+    if (!_initialized) return;
+    if (_groupMemo.containsKey(groupId)) return;
+    await loadGroupMessages(groupId);
   }
 
   /// Save group messages to cache.
@@ -150,6 +247,8 @@ class ChatCacheService {
 
     // Don't strip file URLs anymore - preserve all data for proper display
     final cachedMessages = capped.map((m) => _stripGroupFileData(m)).toList();
+
+    _rememberGroup(groupId, cachedMessages);
 
     await _groupChatBox.put(_groupConversationKey(groupId), {
       'messages': cachedMessages.map((m) => m.toJson()).toList(),
@@ -171,12 +270,14 @@ class ChatCacheService {
     final data = _groupChatBox.get(_groupConversationKey(groupId));
     if (data == null) return [];
     final rawList = (data['messages'] as List?) ?? const [];
-    return rawList
+    final decoded = rawList
         .map(
           (item) =>
               GroupMessage.fromJson(Map<String, dynamic>.from(item as Map)),
         )
         .toList();
+    _rememberGroup(groupId, decoded);
+    return decoded;
   }
 
   /// Add a single group message to the cache.
@@ -256,6 +357,13 @@ class ChatCacheService {
   /// Optional helper to clear cache for a user (e.g., on logout).
   static Future<void> clearUserCache(int currentUserId) async {
     if (!_initialized) return;
+    // Drop every in-memory copy too, or a logout would leave the next account
+    // able to peek the previous user's conversations.
+    _conversationMemo.clear();
+    _memoOrder.clear();
+    _aiMemoUserId = null;
+    _aiMemoSessionId = null;
+    _aiMemoMessages = null;
     final keysToDelete = _chatBox.keys
         .where((key) => key is String && key.contains('conversation_'))
         .where(
@@ -280,6 +388,8 @@ class ChatCacheService {
   /// Clear all group message caches.
   static Future<void> clearAllGroupCaches() async {
     if (!_initialized) return;
+    _groupMemo.clear();
+    _groupMemoOrder.clear();
     await _groupChatBox.clear();
   }
 
@@ -291,12 +401,16 @@ class ChatCacheService {
     if (!_initialized) return;
     final key = _conversationKey(currentUserId, otherUserId);
     debugPrint('🗑️ Clearing conversation cache for key: $key');
+    _conversationMemo.remove(key);
+    _memoOrder.remove(key);
     await _chatBox.delete(key);
   }
 
   /// Clear cache for a specific group.
   static Future<void> clearGroupCache(int groupId) async {
     if (!_initialized) return;
+    _groupMemo.remove(groupId);
+    _groupMemoOrder.remove(groupId);
     await _groupChatBox.delete(_groupConversationKey(groupId));
   }
 
@@ -324,6 +438,47 @@ class ChatCacheService {
   // The AI chat keeps its own Hive box because messages are plain
   // role/content/timestamp maps rather than the full Message model.
 
+  /// Decoded copy of the AI session most recently loaded or saved. There is
+  /// effectively one active AI session per user, so a single slot is enough to
+  /// let the AI screen paint on its first frame — the session id itself lives
+  /// in SharedPreferences behind an await, so there is nothing to key on
+  /// synchronously anyway.
+  static int? _aiMemoUserId;
+  static int? _aiMemoSessionId;
+  static List<Map<String, String>>? _aiMemoMessages;
+
+  static void _rememberAiSession(
+    int currentUserId,
+    int sessionId,
+    List<Map<String, String>> messages,
+  ) {
+    _aiMemoUserId = currentUserId;
+    _aiMemoSessionId = sessionId;
+    _aiMemoMessages = messages
+        .map((m) => Map<String, String>.from(m))
+        .toList(growable: false);
+  }
+
+  /// Synchronously read the last-known AI conversation, or null on a miss.
+  /// The session id is returned alongside so the caller can tell whether the
+  /// session it eventually resolves matches what it painted.
+  static ({int sessionId, List<Map<String, String>> messages})?
+      peekLastAiSession(int currentUserId) {
+    final messages = _aiMemoMessages;
+    final sessionId = _aiMemoSessionId;
+    if (messages == null || sessionId == null) return null;
+    if (_aiMemoUserId != currentUserId) return null;
+    if (messages.isEmpty) return null;
+    return (sessionId: sessionId, messages: messages);
+  }
+
+  /// Warm the AI session memo so opening the AI chat paints immediately.
+  static Future<void> preloadAiSession(int currentUserId, int sessionId) async {
+    if (!_initialized) return;
+    if (_aiMemoUserId == currentUserId && _aiMemoSessionId == sessionId) return;
+    await loadAiSessionMessages(currentUserId, sessionId);
+  }
+
   /// Persist the message list for an AI session, capped to keep storage
   /// bounded. Messages are stored verbatim (the AI chat does not attach
   /// remote files like the 1:1 / group chats do).
@@ -336,6 +491,7 @@ class ChatCacheService {
     final capped = messages.length > _maxMessagesPerThread
         ? messages.sublist(messages.length - _maxMessagesPerThread)
         : messages;
+    _rememberAiSession(currentUserId, sessionId, capped);
     await _aiChatBox.put(_aiSessionKey(currentUserId, sessionId), {
       'messages': capped.map(Map<String, String>.from).toList(),
       'updated_at': DateTime.now().toIso8601String(),
@@ -353,13 +509,15 @@ class ChatCacheService {
     final data = _aiChatBox.get(_aiSessionKey(currentUserId, sessionId));
     if (data == null) return const <Map<String, String>>[];
     final raw = (data['messages'] as List?) ?? const [];
-    return raw
+    final decoded = raw
         .map<Map<String, String>>(
           (item) => Map<String, String>.from(
             (item as Map).map((k, v) => MapEntry(k.toString(), v?.toString() ?? '')),
           ),
         )
         .toList();
+    _rememberAiSession(currentUserId, sessionId, decoded);
+    return decoded;
   }
 
   /// Drop the cached message list for an AI session (e.g. when the user
@@ -369,6 +527,11 @@ class ChatCacheService {
     int sessionId,
   ) async {
     if (!_initialized) return;
+    if (_aiMemoUserId == currentUserId && _aiMemoSessionId == sessionId) {
+      _aiMemoUserId = null;
+      _aiMemoSessionId = null;
+      _aiMemoMessages = null;
+    }
     await _aiChatBox.delete(_aiSessionKey(currentUserId, sessionId));
   }
 }

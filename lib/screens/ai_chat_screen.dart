@@ -1038,7 +1038,31 @@ class _AiChatScreenState extends State<AiChatScreen>
     _scrollController.addListener(_handleScrollPosition);
     _messageController.addListener(_onComposerTextChangedForDraft);
     _loadDraftIntoComposer();
+    _seedFromWarmCache();
     _initialize();
+  }
+
+  /// Paint the last-known AI conversation on the first frame. [_initialize]
+  /// only reaches its cache read after awaiting the token, the user id and the
+  /// saved session id, so without this the screen shows a spinner every time
+  /// even though the messages were already on disk. The normal flow still runs
+  /// and takes over — it will flip the spinner back on only if the server
+  /// turns out to have a different session than the one painted here.
+  void _seedFromWarmCache() {
+    final userId = _socketService.currentUserId;
+    if (userId == null) return;
+
+    final warm = ChatCacheService.peekLastAiSession(userId);
+    if (warm == null) return;
+
+    _sessionId = warm.sessionId;
+    _messages
+      ..clear()
+      ..addAll(warm.messages);
+    _isLoading = false;
+    debugPrint(
+      '[AiChatScreen] Painted ${_messages.length} cached messages on first frame',
+    );
   }
 
   @override
