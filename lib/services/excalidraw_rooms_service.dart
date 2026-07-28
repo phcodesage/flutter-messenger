@@ -172,6 +172,64 @@ class ExcalidrawRoomsService {
       ApiConfig.getExcalidrawBoardLink(room.roomId, room.roomKey);
 
   // ---------------------------------------------------------------------
+  // sending chat content into a board
+  //
+  // The scene is encrypted under the room key, which the server does not
+  // have, so it cannot write anything into a drawing itself. It hands the
+  // content to one client that has the board open, and that client draws it.
+  // Nobody open means nothing lands — hence `listeners` in the reply.
+  // ---------------------------------------------------------------------
+
+  /// Result of a send: how many clients had the board open, and whether one
+  /// of them acknowledged.
+  static Future<({int listeners, bool delivered})> _send(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('${ApiConfig.origin}$path'),
+          headers: await _headers(),
+          body: jsonEncode(body),
+        )
+        .timeout(ApiConfig.connectionTimeout);
+
+    if (response.statusCode == 202 || response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return (
+        listeners: (data['listeners'] as num?)?.toInt() ?? 0,
+        delivered: data['delivered'] as bool? ?? false,
+      );
+    }
+    await _handledAuthFailure(response);
+    throw Exception(_errorFrom(response, 'Could not send to the board'));
+  }
+
+  /// Send text as a card. `variant: 'task'` draws it green, like the web does.
+  static Future<({int listeners, bool delivered})> sendNote({
+    required String roomId,
+    required String text,
+    String variant = 'note',
+    String? author,
+  }) => _send('/api/excalidraw/send-note', {
+    'room': roomId,
+    'text': text,
+    'variant': variant,
+    if (author != null) 'author': author,
+  });
+
+  /// Send an image that is already hosted on our backend.
+  static Future<({int listeners, bool delivered})> sendPhoto({
+    required String roomId,
+    required String fileUrl,
+    String? fileName,
+  }) => _send('/api/excalidraw/send-photo', {
+    'room': roomId,
+    'file_url': fileUrl,
+    if (fileName != null) 'file_name': fileName,
+  });
+
+  // ---------------------------------------------------------------------
   // unread bookkeeping
   //
   // A board change stays unread until the Excalidraw modal is opened for that

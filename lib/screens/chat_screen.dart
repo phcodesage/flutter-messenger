@@ -80,6 +80,7 @@ import '../services/forward_service.dart';
 import '../widgets/forward_recipient_picker.dart';
 import '../services/excalidraw_rooms_service.dart';
 import '../widgets/excalidraw_rooms_section.dart';
+import '../widgets/excalidraw_room_picker.dart';
 import 'excalidraw_board_screen.dart';
 
 /// Chat screen for messaging with a specific user
@@ -3298,6 +3299,82 @@ class _ChatScreenState extends State<ChatScreen>
     final me = _currentUserId;
     if (me == null) return null;
     return ExcalidrawRoomsService.dmKey(me, widget.otherUser.id);
+  }
+
+  /// Text and images only. Everything else (documents, voice notes, calls) has
+  /// no sensible representation on a canvas.
+  bool _canSendToExcalidrawRoom(Message message) {
+    if (message.isDeleted) return false;
+    if (message.messageType == 'image') {
+      return (message.fileUrl ?? '').isNotEmpty;
+    }
+    return message.messageType == 'text' && message.content.trim().isNotEmpty;
+  }
+
+  /// Ask which board, then hand the content to it.
+  Future<void> _sendMessageToExcalidrawRoom(Message message) async {
+    final conversationKey = _excalidrawConversationKey;
+    if (conversationKey == null) return;
+
+    final room = await ExcalidrawRoomPicker.show(
+      context,
+      conversationKey: conversationKey,
+    );
+    if (room == null || !mounted) return;
+
+    try {
+      final isImage = message.messageType == 'image';
+      final result = isImage
+          ? await ExcalidrawRoomsService.sendPhoto(
+              roomId: room.roomId,
+              fileUrl: _absoluteFileUrl(message.fileUrl!),
+              fileName: message.fileName,
+            )
+          : await ExcalidrawRoomsService.sendNote(
+              roomId: room.roomId,
+              text: message.content.trim(),
+              // A message already marked as a task becomes a green task card,
+              // matching what the web context menu sends.
+              variant: message.isTask ? 'task' : 'note',
+            );
+
+      if (!mounted) return;
+      // The server cannot draw into an encrypted scene, so with nobody in the
+      // room there is no one to do it — say so rather than claiming success.
+      if (result.listeners == 0) {
+        _showTopSnackBar(
+          SnackBar(
+            content: Text(
+              'Nobody has "${room.title}" open — open the board and send again.',
+            ),
+            backgroundColor: const Color(0xFFB45309),
+          ),
+        );
+        return;
+      }
+      _showTopSnackBar(
+        SnackBar(
+          content: Text(
+            isImage ? 'Photo sent to ${room.title}' : 'Sent to ${room.title}',
+          ),
+          backgroundColor: const Color(0xFF15803D),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showTopSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Chat file urls are stored relative; the board fetches them by URL.
+  String _absoluteFileUrl(String rawUrl) {
+    if (rawUrl.toLowerCase().startsWith('http')) return rawUrl;
+    return '${ApiConfig.origin}/${rawUrl.replaceFirst(RegExp(r'^/+'), '')}';
   }
 
   /// A board in some conversation changed. Only this chat's own boards matter
@@ -12607,6 +12684,18 @@ class _ChatScreenState extends State<ChatScreen>
                     closeWithAction(
                       sheetContext,
                       () => _toggleExcalidrawPin(message),
+                    );
+                  },
+                ),
+              if (_canSendToExcalidrawRoom(message))
+                _buildContextMenuActionTile(
+                  icon: Icons.draw_outlined,
+                  label: 'Send to Excalidraw room',
+                  iconColor: const Color(0xFFF97316),
+                  onTap: () {
+                    closeWithAction(
+                      sheetContext,
+                      () => _sendMessageToExcalidrawRoom(message),
                     );
                   },
                 ),

@@ -55,6 +55,7 @@ import '../utils/chat_exporter.dart';
 import '../utils/file_saver.dart';
 import '../services/excalidraw_rooms_service.dart';
 import '../widgets/excalidraw_rooms_section.dart';
+import '../widgets/excalidraw_room_picker.dart';
 import 'excalidraw_board_screen.dart';
 
 /// Group chat screen for messaging in a group
@@ -106,6 +107,77 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (count != _excalidrawRoomsUnread) {
       setState(() => _excalidrawRoomsUnread = count);
     }
+  }
+
+  /// Text and images only. Everything else (documents, voice notes, calls) has
+  /// no sensible representation on a canvas.
+  bool _canSendToExcalidrawRoom(GroupMessage message) {
+    if (message.isDeleted) return false;
+    if (message.messageType == 'image') {
+      return (message.fileUrl ?? '').isNotEmpty;
+    }
+    return message.messageType == 'text' && message.content.trim().isNotEmpty;
+  }
+
+  /// Ask which board, then hand the content to it.
+  Future<void> _sendMessageToExcalidrawRoom(GroupMessage message) async {
+    final room = await ExcalidrawRoomPicker.show(
+      context,
+      conversationKey: _excalidrawConversationKey,
+    );
+    if (room == null || !mounted) return;
+
+    try {
+      final isImage = message.messageType == 'image';
+      final result = isImage
+          ? await ExcalidrawRoomsService.sendPhoto(
+              roomId: room.roomId,
+              fileUrl: _absoluteFileUrl(message.fileUrl!),
+              fileName: message.fileName,
+            )
+          : await ExcalidrawRoomsService.sendNote(
+              roomId: room.roomId,
+              text: message.content.trim(),
+              variant: message.isTask ? 'task' : 'note',
+            );
+
+      if (!mounted) return;
+      // The server cannot draw into an encrypted scene, so with nobody in the
+      // room there is no one to do it — say so rather than claiming success.
+      if (result.listeners == 0) {
+        _showTopSnackBar(
+          SnackBar(
+            content: Text(
+              'Nobody has "${room.title}" open — open the board and send again.',
+            ),
+            backgroundColor: const Color(0xFFB45309),
+          ),
+        );
+        return;
+      }
+      _showTopSnackBar(
+        SnackBar(
+          content: Text(
+            isImage ? 'Photo sent to ${room.title}' : 'Sent to ${room.title}',
+          ),
+          backgroundColor: const Color(0xFF15803D),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showTopSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Chat file urls are stored relative; the board fetches them by URL.
+  String _absoluteFileUrl(String rawUrl) {
+    if (rawUrl.toLowerCase().startsWith('http')) return rawUrl;
+    return '${ApiConfig.origin}/${rawUrl.replaceFirst(RegExp(r'^/+'), '')}';
   }
 
   /// A board changed somewhere; only this group's own boards matter here.
@@ -7442,6 +7514,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   onTap: () {
                     Navigator.pop(context);
                     _toggleGroupExcalidrawPin(message);
+                  },
+                ),
+              // Send text or an image into one of this group's whiteboards.
+              if (_canSendToExcalidrawRoom(message))
+                ListTile(
+                  leading: const Icon(
+                    Icons.draw_outlined,
+                    color: Color(0xFFF97316),
+                  ),
+                  title: const Text(
+                    'Send to Excalidraw room',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _sendMessageToExcalidrawRoom(message);
                   },
                 ),
               // Translate option (for incoming text messages)

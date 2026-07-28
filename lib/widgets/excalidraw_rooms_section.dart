@@ -91,7 +91,10 @@ class ExcalidrawRoomsSectionState extends State<ExcalidrawRoomsSection> {
       );
       if (!mounted) return;
       setState(() {
-        _rooms = [room, ..._rooms];
+        // Keyed insert, not a blind prepend: the server echoes our own create
+        // over the socket, and that echo triggers a reload which can land
+        // either side of this response. Two paths, one board.
+        _rooms = [room, ..._rooms.where((r) => r.id != room.id)];
         _titleController.clear();
       });
       await ExcalidrawRoomsService.markSeen(key);
