@@ -1999,6 +1999,21 @@ class _ChatScreenState extends State<ChatScreen>
       _handleMessagesRead(data);
     });
 
+    // This conversation was read (or replied to) on another device signed in as
+    // us — the server already marked it read, so drop the local "new messages"
+    // counter instead of leaving a badge for messages we've demonstrably seen.
+    _socketService.addListener('unreadCleared', key, (
+      Map<String, dynamic> data,
+    ) {
+      final peerId = _toInt(data['peer_id']);
+      if (peerId != widget.otherUser.id || !mounted) return;
+      if (_unreadCount == 0) return;
+      setState(() => _unreadCount = 0);
+      debugPrint(
+        '[CHAT] Cleared in-chat unread counter for ${widget.otherUser.id} (read on another device)',
+      );
+    });
+
     // Listen for individual message delivery confirmations
     _socketService.addListener('messageDelivered', key, (
       Map<String, dynamic> data,

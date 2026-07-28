@@ -119,6 +119,10 @@ class ForwardService {
   /// For text messages: sends content + message_type.
   /// For media/file messages: also includes file_url, file_name, file_size, file_type
   /// so the backend creates a proper file message without re-upload.
+  ///
+  /// `forwarded: true` tells the backend NOT to treat this as "I've read that
+  /// conversation" — forwarding targets chats the user never opened, so it must
+  /// not clear their unread badge or hand the recipient a false seen-tick.
   static Map<String, dynamic> _buildPayload(Message message) {
     final isMedia = message.messageType != 'text' &&
         message.messageType != 'system' &&
@@ -134,12 +138,14 @@ class ForwardService {
         if (message.fileName != null) 'file_name': message.fileName,
         if (message.fileSize != null) 'file_size': message.fileSize,
         if (message.fileType != null) 'file_type': message.fileType,
+        'forwarded': true,
       };
     }
 
     return {
       'content': message.content,
       'message_type': 'text',
+      'forwarded': true,
     };
   }
 
