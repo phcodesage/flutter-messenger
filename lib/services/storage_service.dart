@@ -316,6 +316,10 @@ class StorageService {
       if (userId != null) {
         await ChatCacheService.clearUserCache(userId);
         await clearAiSessionId(userId);
+        // The cache this cursor refers to has just been wiped. Leaving it set
+        // would make the next prefetch incremental against messages that are
+        // no longer stored, so the rooms would come back empty.
+        await clearPrefetchCursor(userId);
       }
     } catch (e) {
       debugPrint('Error clearing storage: $e');
@@ -598,6 +602,43 @@ class StorageService {
       await prefs.setString(key, rawJson);
     } catch (e) {
       debugPrint('Error saving forward frequencies: $e');
+    }
+  }
+
+  // --- Bulk prefetch cursor (see PrefetchService) ------------------------
+  // Highest message id already written into the local cache. Passed back as
+  // after_id so later runs transfer only what is new instead of every
+  // conversation's tail again.
+
+  static String _prefetchCursorKey(int userId) => 'prefetch_cursor_$userId';
+
+  static Future<int> getPrefetchCursor(int userId) async {
+    try {
+      final prefs = await _getPrefs();
+      return prefs.getInt(_prefetchCursorKey(userId)) ?? 0;
+    } catch (e) {
+      debugPrint('Error reading prefetch cursor: $e');
+      return 0;
+    }
+  }
+
+  static Future<void> savePrefetchCursor(int userId, int messageId) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setInt(_prefetchCursorKey(userId), messageId);
+    } catch (e) {
+      debugPrint('Error saving prefetch cursor: $e');
+    }
+  }
+
+  /// Forget the cursor so the next run refetches everything — used when the
+  /// local cache is cleared or a different user logs in.
+  static Future<void> clearPrefetchCursor(int userId) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.remove(_prefetchCursorKey(userId));
+    } catch (e) {
+      debugPrint('Error clearing prefetch cursor: $e');
     }
   }
 }

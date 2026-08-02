@@ -35,6 +35,7 @@ import '../services/active_chat_service.dart';
 import '../services/draft_service.dart';
 import '../services/pending_incoming_call_service.dart';
 import '../services/chat_cache_service.dart';
+import '../services/prefetch_service.dart';
 import '../services/share_intent_service.dart';
 import '../services/shortcut_service.dart';
 import '../services/version_service.dart';
@@ -2232,6 +2233,17 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
       if (userId != null) {
         await ChatCacheService.saveLobbyUsers(userId, users);
         await ChatCacheService.saveGroups(userId, results[1] as List<Group>);
+        // Fill the on-disk cache for every conversation before warming the
+        // decoded tails: _preloadTopConversations can only decode what Hive
+        // already holds, so on a fresh install it has nothing to work with and
+        // each room spins the first time it is opened. The sweep runs detached
+        // and writes into the same caches, so the lobby paints immediately and
+        // rooms become instant as their entries land.
+        unawaited(
+          PrefetchService.warmAll(full: !PrefetchService.hasWarmed).then((_) {
+            if (mounted) _preloadTopConversations(userId, users, groups);
+          }),
+        );
         unawaited(_preloadTopConversations(userId, users, groups));
       }
       // Refresh AI chat presence so its tile sorts correctly with fresh server data
