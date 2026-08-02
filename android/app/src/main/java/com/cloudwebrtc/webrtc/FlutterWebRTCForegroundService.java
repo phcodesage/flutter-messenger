@@ -9,6 +9,8 @@ import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 
+import androidx.core.app.NotificationCompat;
+
 public class FlutterWebRTCForegroundService extends Service {
 
     private static final String CHANNEL_ID = "screen_share_channel";
@@ -147,16 +149,21 @@ public class FlutterWebRTCForegroundService extends Service {
     }
 
     private Notification buildNotification(String title, String text) {
-        Notification.Builder builder;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder = new Notification.Builder(this, CHANNEL_ID);
-        } else {
-            builder = new Notification.Builder(this);
-        }
-        return builder
+        // NotificationCompat rather than the platform Notification.Builder: the
+        // no-channel constructor `new Notification.Builder(Context)` is
+        // deprecated as of API 26, and it was the only way to build one on the
+        // API 24-25 devices this app still supports (minSdk 24) — so the
+        // version check could not avoid the deprecated call, only hide it in a
+        // branch. NotificationCompat takes the channel id on every API level and
+        // ignores it below O, which collapses the branch entirely.
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
+                // LOW matches the channel's importance; below O, where there are
+                // no channels, this is what keeps the screen-share notice quiet.
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
                 .build();
     }
 }
