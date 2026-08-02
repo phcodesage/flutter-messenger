@@ -513,6 +513,11 @@ class _ChatScreenState extends State<ChatScreen>
       });
     }
 
+    // An offer can age out while its modal is already on screen (the caller
+    // hung up on another device and the cancel never arrived). Close it rather
+    // than leaving the user staring at a call they can no longer answer.
+    PendingIncomingCallService().expired.addListener(_onPendingCallExpired);
+
     _initialize();
     // Periodically refresh "last seen" relative label in header (like the web app does)
     _lastSeenRefreshTimer = Timer.periodic(const Duration(seconds: 60), (_) {
@@ -7413,6 +7418,13 @@ class _ChatScreenState extends State<ChatScreen>
     return _isCallAnsweredForActiveIncomingModal(payload);
   }
 
+  /// The pending offer aged out — take down any incoming-call UI it opened.
+  void _onPendingCallExpired() {
+    if (!mounted) return;
+    debugPrint('[ChatScreen] pending call expired — dismissing incoming call UI');
+    _dismissIncomingCallModalIfOpen();
+  }
+
   void _dismissIncomingCallModalIfOpen() {
     final route = _activeIncomingCallRoute;
     if (route == null || !mounted) return;
@@ -11836,6 +11848,7 @@ class _ChatScreenState extends State<ChatScreen>
     _autoCorrectionPreviewTimer?.cancel();
     _typingHideTimer?.cancel();
     _typingUpdateThrottle?.cancel();
+    PendingIncomingCallService().expired.removeListener(_onPendingCallExpired);
     _lastSeenRefreshTimer?.cancel();
     _callInProgressOnOtherDeviceTimer?.cancel();
     _topSnackBarTimer?.cancel();

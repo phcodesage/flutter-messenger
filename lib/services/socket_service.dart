@@ -1,9 +1,12 @@
 import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:async';
+import 'dart:io' show Platform;
 import '../config/api_config.dart';
 import 'auth_error_handler.dart';
 import 'socket_event_queue_service.dart';
+import 'pending_incoming_call_service.dart';
 
 /// Service for handling Socket.IO real-time communication.
 /// Uses a multi-listener broadcast pattern so multiple screens
@@ -933,6 +936,55 @@ class SocketService {
     _connect();
   }
 
+  /// App version, read once. PackageInfo is async but the Socket.IO options map
+  /// is built synchronously, so it is primed at startup (see
+  /// [primeClientIdentity]) and read from here.
+  static String _appVersion = 'unknown';
+
+  /// Load the app version so the first connection can report it. Called from
+  /// main() before the socket is ever opened; safe to call more than once.
+  static Future<void> primeClientIdentity() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final build = info.buildNumber;
+      _appVersion = build.isEmpty ? info.version : '${info.version}+$build';
+    } catch (e) {
+      debugPrint('[Socket] could not read app version: $e');
+    }
+  }
+
+  /// What the server records for this session on the admin dashboard.
+  static Map<String, dynamic> _clientIdentity() {
+    String platform = 'Unknown';
+    String platformVersion = '';
+    try {
+      if (Platform.isAndroid) {
+        platform = 'Android';
+      } else if (Platform.isIOS) {
+        platform = 'iOS';
+      } else if (Platform.isMacOS) {
+        platform = 'macOS';
+      } else if (Platform.isWindows) {
+        platform = 'Windows';
+      } else if (Platform.isLinux) {
+        platform = 'Linux';
+      }
+      // e.g. "Android 13 (SDK 33)" — trimmed to the leading version.
+      final v = Platform.operatingSystemVersion;
+      final match = RegExp(r'[\d]+(\.[\d]+)*').firstMatch(v);
+      if (match != null) platformVersion = match.group(0)!;
+    } catch (_) {
+      // Platform is unavailable on web builds; the defaults above are fine.
+    }
+    return {
+      'app_version': _appVersion,
+      'client': 'mobile',
+      'browser': 'ChatX mobile',
+      'platform': platform,
+      'platform_version': platformVersion,
+    };
+  }
+
   void _connect() {
     if (_socket != null && _socket!.connected) {
       debugPrint('Socket already connected');
@@ -954,6 +1006,10 @@ class SocketService {
         'autoConnect': false,
         'query': {'token': _authToken},
         'extraHeaders': {'Authorization': 'Bearer $_authToken'},
+        // Identifies this client on the admin dashboard. A phone's User-Agent
+        // is just 'Dart/x (dart:io)' — no app version, no OS — so without this
+        // every mobile session shows up as "Unknown / vunknown".
+        'auth': _clientIdentity(),
         'forceNew': true,
         'reconnection': true,
         'timeout': 20000,
@@ -1001,6 +1057,9 @@ class SocketService {
     _socket!.on('connect', (_) {
       debugPrint('✅ Socket connected - ID: ${_socket!.id}');
       debugPrint('🔍 [SOCKET DEBUG] Connect event received');
+      // Any call-cancelled sent while we were disconnected is gone for good, so
+      // an offer left ringing from before the drop has to be aged out here.
+      PendingIncomingCallService().expireIfStale();
       // Notify all connection listeners that connection is restored
       _broadcast(_connectionChangedListeners, {'connected': true});
       for (final cb in _reconnectedListeners.values.toList()) {

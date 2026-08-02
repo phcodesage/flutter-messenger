@@ -35,6 +35,7 @@ import 'services/version_service.dart';
 import 'utils/notification_handler.dart';
 
 import 'services/alarm_notification_service.dart';
+import 'services/pending_incoming_call_service.dart';
 
 final Completer<void> _bootstrapReadyCompleter = Completer<void>();
 
@@ -52,6 +53,9 @@ void main() async {
   // Keep Android OS launch window visible until we know the first real screen.
   await StorageService.init();
   await ChatCacheService.init();
+  // Read the app version before any socket opens, so the first connection can
+  // report which build this phone is running to the admin dashboard.
+  await SocketService.primeClientIdentity();
   await MediaUploadRetryService().initialize();
   await TextMessageRetryService().initialize();
   await SocketEventQueueService().initialize();
@@ -336,6 +340,12 @@ class _MessengerAppState extends State<MessengerApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed || !mounted) return;
+
+    // Before the throttle below: a suspended process does not run its timers,
+    // so an offer that rang while the phone was asleep is still on screen after
+    // the call has long since ended elsewhere. Checking its age on resume is
+    // what actually clears it, and it costs nothing.
+    PendingIncomingCallService().expireIfStale();
 
     final now = DateTime.now();
     if (_lastResumeUpdateCheck != null &&
