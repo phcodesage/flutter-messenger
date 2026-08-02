@@ -217,6 +217,11 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
 
       // Mark as fully initialized
       _isFullyInitialized = true;
+
+      // Tell the peer what our mic and camera are actually doing. Without this
+      // the other end shows its default assumption ("both on") until we happen
+      // to toggle something — so a call joined muted looked unmuted on web.
+      _publishLocalMediaState();
     } catch (e) {
       debugPrint(
         '❌ ConnectedCallScreen: Async initialization failed for ${widget.callType} call: $e',
@@ -544,9 +549,32 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
         return; // Don't route further — call is over
       }
 
+      // Device-state messages now arrive over the socket rather than the data
+      // channel (see CallService.sendControlSignal). The switch that applies
+      // them lives in the data-channel handler, so feed them through it —
+      // otherwise the web peer muting or hiding video changes nothing here.
+      if (signal is Map && _controlSignalTypes.contains(signalType)) {
+        try {
+          _handleIncomingDataChannelMessage(
+            jsonEncode(Map<String, dynamic>.from(signal)),
+          );
+        } catch (e) {
+          debugPrint('⚠️ Could not apply control signal $signalType: $e');
+        }
+      }
+
       widget.callService.handleSignal(data);
     };
   }
+
+  /// Control messages that must be applied locally regardless of which
+  /// transport delivered them.
+  static const Set<String> _controlSignalTypes = {
+    'mic-state',
+    'cam-state',
+    'force-mute',
+    'force_mute',
+  };
 
   void _handleIncomingDataChannelMessage(String rawMessage) {
     Map<String, dynamic>? payload;
@@ -841,6 +869,43 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
     }
   }
 
+  /// Publish our current mic / camera state to the peer.
+  ///
+  /// Read off the real tracks rather than the UI flags, so what the other end
+  /// displays matches what is actually being transmitted. Called once the call
+  /// is up; the peer's badges are wrong until it arrives.
+  void _publishLocalMediaState() {
+    final stream = widget.localStream ?? widget.callService.localStream;
+    if (stream == null) return;
+
+    bool? micOn;
+    bool? camOn;
+    try {
+      final audio = stream.getAudioTracks();
+      if (audio.isNotEmpty) micOn = audio.first.enabled;
+      final video = stream.getVideoTracks();
+      if (video.isNotEmpty) camOn = video.first.enabled;
+    } catch (e) {
+      debugPrint('⚠️ Could not read local track state: $e');
+      return;
+    }
+
+    if (micOn != null) {
+      _sendControlSignal({
+        'type': 'mic-state',
+        'enabled': micOn,
+        if (_localUserName.isNotEmpty) 'from': _localUserName,
+      });
+    }
+    if (camOn != null && widget.callType != 'audio') {
+      _sendControlSignal({
+        'type': 'cam-state',
+        'enabled': camOn,
+        if (_localUserName.isNotEmpty) 'from': _localUserName,
+      });
+    }
+  }
+
   /// Explain why the mic control is inert instead of letting the tap do nothing.
   void _notifyAdminMuteLocked() {
     if (!mounted) return;
@@ -1127,6 +1192,16 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
     super.dispose();
   }
 
+  /// True when the remote view is the peer's avatar rather than their video:
+  /// any audio call, or a video call where their camera is off. In that state
+  /// the badges that normally ride on top of the remote video have nowhere to
+  /// sit, so [build] floats them instead.
+  bool get _showingRemoteAvatar =>
+      (widget.callType == 'audio' && !_isRemoteScreenSharing) ||
+      (widget.callType == 'video' &&
+          !_isRemoteScreenSharing &&
+          !_remoteCameraEnabled);
+
   @override
   Widget build(BuildContext context) {
     debugPrint(
@@ -1155,17 +1230,28 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
                     // Local video (PiP, draggable) - hide in PiP mode
                     if (!_isInPipMode) _buildLocalVideoPiP(),
 
-                    // Our own mic state in an audio call. The local preview
-                    // carries this badge in a video call, but that preview is
-                    // not rendered when there is no video — without this you
-                    // could see the peer's mic status and not your own.
-                    if (!_isInPipMode && widget.callType == 'audio')
+                    // The PEER's mic (and camera) state — the one thing you
+                    // cannot otherwise tell: whether the person you cannot hear
+                    // is muted or just quiet. Our own state is already on the
+                    // Mute mic button below.
+                    //
+                    // Anchored here, in the screen Stack, rather than inside
+                    // _buildRemoteVideo: the remote view swaps between video and
+                    // avatar whenever the peer hides their camera, and a badge
+                    // living in either branch would jump to a different corner on
+                    // every toggle. One fixed home, below the top bar (whose
+                    // duration pill shares this right edge), for every state.
+                    if (!_isInPipMode)
                       Positioned(
+                        top: MediaQuery.of(context).padding.top + 56,
                         right: 12,
-                        bottom: _showControls ? 190 : 24,
                         child: CallStatusBadges(
-                          micOn: !_isMicMuted,
-                          isSelf: true,
+                          micOn: _remoteMicEnabled,
+                          // No camera pill in an audio call — no video in play.
+                          cameraOn: widget.callType == 'audio'
+                              ? null
+                              : _remoteCameraEnabled,
+                          isSelf: false,
                         ),
                       ),
 
@@ -1192,13 +1278,8 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
     Widget content;
 
     // Show avatar view when there is no remote video feed to display.
-    final shouldShowAvatar =
-        (widget.callType == 'audio' && !_isRemoteScreenSharing) ||
-        (widget.callType == 'video' &&
-            !_isRemoteScreenSharing &&
-            !_remoteCameraEnabled);
-
-    if (shouldShowAvatar) {
+    // Shared with build(), which floats the peer's status badges in this state.
+    if (_showingRemoteAvatar) {
       content = Container(
         color: const Color(0xFF1A1A2E),
         child: Center(
@@ -1263,17 +1344,9 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
             ),
           ),
-          // Peer's real mic / camera state, top-right, for as long as it lasts.
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 12,
-            right: 12,
-            child: CallStatusBadges(
-              micOn: _remoteMicEnabled,
-              // No camera pill in an audio call — there is no video in play.
-              cameraOn: widget.callType == 'audio' ? null : _remoteCameraEnabled,
-              isSelf: false,
-            ),
-          ),
+          // Peer's mic / camera badges are NOT here — build() anchors them for
+          // the whole screen so they keep one position whether this is the
+          // peer's video or their avatar.
           // Screen share indicator
           if (_isRemoteScreenSharing)
             Positioned(
@@ -1551,7 +1624,10 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
         ? 5
         : width >= 500
         ? 4
-        : width >= 380
+        // 340, not 380: a typical phone is 360-412dp, so the old threshold put
+        // every common handset in the 2-column layout, where each button spans
+        // half the screen and the grid eats the video.
+        : width >= 340
         ? 3
         : 2;
 
@@ -1573,9 +1649,11 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
         itemCount: controls.length,
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: crossAxisCount,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-          childAspectRatio: 2.6,
+          mainAxisSpacing: 6,
+          crossAxisSpacing: 6,
+          // Flatter cells — 2.6 gave ~65dp-tall buttons on a phone. Wider than
+          // tall keeps the labels readable while returning height to the video.
+          childAspectRatio: 3.2,
         ),
         itemBuilder: (context, index) => controls[index],
       ),
@@ -1597,10 +1675,10 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
         onLongPress: enabled ? onLongPress : null,
         child: Container(
           alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           decoration: BoxDecoration(
             color: enabled ? backgroundColor : Colors.grey.shade700,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
             label,
