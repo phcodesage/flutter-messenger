@@ -27,6 +27,8 @@ import 'services/storage_service.dart';
 import 'services/share_intent_service.dart';
 import 'services/shortcut_service.dart';
 import 'services/socket_service.dart';
+import 'services/message_cache_sync_service.dart';
+import 'services/prefetch_service.dart';
 import 'services/presence_service.dart';
 import 'services/media_upload_retry_service.dart';
 import 'services/text_message_retry_service.dart';
@@ -81,6 +83,10 @@ Future<Widget> _resolveInitialHome() async {
 
   // Restore realtime services for authenticated sessions.
   SocketService().initialize(token, userId);
+  // Mirror every socket message into the local cache for the whole session, so
+  // a room is up to date when it is opened even though its screen was never
+  // mounted to hear the event. Must start with the socket, not with a screen.
+  MessageCacheSyncService().start(userId);
   PresenceService().startHeartbeat();
   unawaited(PresenceService.updateStatus('online'));
 
@@ -358,6 +364,13 @@ class _MessengerAppState extends State<MessengerApp>
     // Re-hydrate offline caches in the background so freshly received
     // messages and media on the server are mirrored locally.
     unawaited(MediaPreloadService.instance.triggerSync());
+    // Messages that landed while the process was suspended were never seen by
+    // the socket, so nothing has written them to the cache — opening the room
+    // would paint a stale tail and wait on its own network refresh. This is the
+    // incremental prefetch (after_id cursor), so it is a small call, and
+    // starting it on resume means the tail is usually already correct by the
+    // time the user has navigated anywhere.
+    unawaited(PrefetchService.warmAll());
   }
 
   @override

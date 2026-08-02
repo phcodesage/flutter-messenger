@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../services/chat_cache_service.dart';
 import '../services/storage_service.dart';
 import '../services/socket_service.dart';
+import '../services/message_cache_sync_service.dart';
 import '../services/presence_service.dart';
 import '../services/fcm_service.dart';
 import '../services/firebase_messaging_service.dart';
@@ -40,6 +41,10 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
       if (token != null && userId != null) {
         // Re-initialize Socket.IO connection
         SocketService().initialize(token, userId);
+
+        // Keep every room's cached tail current for the whole session, not just
+        // while its screen happens to be mounted.
+        MessageCacheSyncService().start(userId);
 
         // Start heartbeat to maintain online status
         PresenceService().startHeartbeat();

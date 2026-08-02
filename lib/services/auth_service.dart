@@ -8,6 +8,7 @@ import '../models/user.dart';
 import '../utils/notification_handler.dart';
 import 'storage_service.dart';
 import 'socket_service.dart';
+import 'message_cache_sync_service.dart';
 import 'presence_service.dart';
 import 'fcm_service.dart';
 import 'firebase_messaging_service.dart';
@@ -61,6 +62,10 @@ class AuthService {
 
         // Initialize Socket.IO connection
         SocketService().initialize(authResponse.token, authResponse.user.id);
+
+        // Keep every room's cached tail current for the whole session, not just
+        // while its screen happens to be mounted.
+        MessageCacheSyncService().start(authResponse.user.id);
 
         // Start heartbeat to maintain online status
         PresenceService().startHeartbeat();
@@ -127,6 +132,10 @@ class AuthService {
         // Initialize Socket.IO connection
         SocketService().initialize(authResponse.token, authResponse.user.id);
 
+        // Keep every room's cached tail current for the whole session, not just
+        // while its screen happens to be mounted.
+        MessageCacheSyncService().start(authResponse.user.id);
+
         // Start heartbeat to maintain online status
         PresenceService().startHeartbeat();
 
@@ -175,6 +184,9 @@ class AuthService {
 
       // Disconnect Socket.IO
       SocketService().disconnect();
+
+      // Stop mirroring messages into the cache for the account we just left.
+      MessageCacheSyncService().stop();
 
       // Stop the offline preload service so it doesn't keep running
       // against the now-invalid token.

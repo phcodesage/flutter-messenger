@@ -5,10 +5,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'dart:async';
 import 'dart:convert';
 import 'background_update_service.dart';
 import 'fcm_service.dart';
 import 'active_chat_service.dart';
+// Aliased: flutter_local_notifications also exports a `Message`
+// (MessagingStyle), and this file uses both.
+import '../models/message.dart' as chat_models;
+import 'chat_cache_service.dart';
+import 'message_cache_sync_service.dart';
 import 'pending_incoming_call_service.dart';
 import 'storage_service.dart';
 import 'version_service.dart';
@@ -651,6 +657,18 @@ class FirebaseMessagingService {
         // For call notifications in foreground, trigger the call handler AND show
         // a heads-up notification so the user sees a banner even when the app is open.
         final data = message.data;
+
+        // A push for an incoming message means that thread has moved on. The
+        // socket normally tells us first and the message is cached before we
+        // get here, but when the socket is down or reconnecting this push is
+        // the only notice we get — and its payload has no message content, so
+        // the room is queued for a background re-sync instead. Without this the
+        // room would still be stale when opened, which is the one way incoming
+        // messages differ from our own cross-device echoes.
+        if (data['type'] == 'message') {
+          _queueConversationRefreshFromPush(data);
+        }
+
         if (data['type'] == 'call') {
           final senderId = int.tryParse(data['sender_id']?.toString() ?? '');
           final activeUserId = ActiveChatService().activeUserId;
@@ -915,6 +933,89 @@ class FirebaseMessagingService {
       }
     } catch (e) {
       debugPrint('❌ Error clearing conversation notification state: $e');
+    }
+  }
+
+  /// Queue the thread a message push belongs to for a background cache refresh,
+  /// so it is already up to date if the user opens it.
+  ///
+  /// Only runs in the foreground isolate. The background handler deliberately
+  /// does not do this: it runs in its own isolate where the Hive boxes are held
+  /// open by the main one, and the app-resume prefetch covers that case.
+  void _queueConversationRefreshFromPush(Map<String, dynamic> data) {
+    try {
+      final sync = MessageCacheSyncService();
+      if (!sync.isRunning) return;
+
+      if (data['conversation_type'] == 'group') {
+        final groupId = int.tryParse(data['group_id']?.toString() ?? '');
+        if (groupId != null) sync.markGroupConversationDirty(groupId);
+        return;
+      }
+
+      // Direct message: the push is addressed to us, so its sender is the peer.
+      final senderId = int.tryParse(data['sender_id']?.toString() ?? '');
+      if (senderId == null) return;
+
+      // The server inlines plain-text messages in the payload. When it does,
+      // cache the message itself — no network at all. Anything else (files,
+      // voice, HTML bodies, or text too long to inline) only marks the room
+      // dirty, and the background refresh fetches the server's parsed copy.
+      unawaited(_cacheMessageFromPush(data, senderId, sync));
+    } catch (e) {
+      debugPrint('📨 Could not queue cache refresh from push: $e');
+    }
+  }
+
+  Future<void> _cacheMessageFromPush(
+    Map<String, dynamic> data,
+    int senderId,
+    MessageCacheSyncService sync,
+  ) async {
+    try {
+      final content = data['content']?.toString();
+      final messageId = int.tryParse(data['message_id']?.toString() ?? '');
+      final recipientId = int.tryParse(data['recipient_id']?.toString() ?? '');
+      final timestamp = data['timestamp']?.toString();
+      // messageType is the key the server sends — `message_type` is reserved by
+      // FCM and gets the whole push rejected. Old key kept as a fallback.
+      final messageType =
+          (data['messageType'] ?? data['message_type'])?.toString() ?? 'text';
+
+      final canBuild = content != null &&
+          content.isNotEmpty &&
+          messageId != null &&
+          recipientId != null &&
+          timestamp != null &&
+          timestamp.isNotEmpty &&
+          messageType == 'text';
+
+      if (!canBuild) {
+        sync.markConversationDirty(senderId);
+        return;
+      }
+
+      // Never cache over the copy the open room is maintaining.
+      if (ActiveChatService().activeUserId == senderId) return;
+
+      final message = chat_models.Message.fromJson({
+        'id': messageId,
+        'sender_id': senderId,
+        'recipient_id': recipientId,
+        'content': content,
+        'message_type': 'text',
+        'timestamp': timestamp,
+        'is_read': false,
+        'status': 'delivered',
+      });
+
+      await ChatCacheService.addMessageToCache(recipientId, senderId, message);
+      debugPrint('📨 Cached pushed message $messageId for conversation $senderId');
+    } catch (e) {
+      // Anything unexpected in the payload: fall back to the refetch, which is
+      // always correct.
+      debugPrint('📨 Could not cache pushed message ($e) — refetching instead');
+      sync.markConversationDirty(senderId);
     }
   }
 

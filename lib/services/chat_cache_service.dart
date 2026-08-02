@@ -40,6 +40,28 @@ class ChatCacheService {
     }
   }
 
+  /// Serialises writes per conversation key.
+  ///
+  /// Every write here is read-modify-write (load the thread, insert, save it
+  /// back). Two of them overlapping on the same thread both read the same base
+  /// list and the second save discards the first message. That used to need two
+  /// screens racing, but now the app-wide MessageCacheSyncService can write to a
+  /// thread whose screen is also mounted (backgrounding clears ActiveChatService
+  /// without unmounting the chat), so the window is real. Chaining each key's
+  /// writes makes the sequence deterministic.
+  static final Map<String, Future<void>> _writeChains = {};
+
+  static Future<void> _serializeWrite(String key, Future<void> Function() work) {
+    final previous = _writeChains[key] ?? Future<void>.value();
+    final next = previous.then((_) => work());
+    _writeChains[key] = next;
+    // Drop the chain once it drains, but only if nothing queued behind us.
+    next.whenComplete(() {
+      if (identical(_writeChains[key], next)) _writeChains.remove(key);
+    });
+    return next;
+  }
+
   static bool _initialized = false;
   static late Box _chatBox;
   static late Box _lobbyBox;
@@ -74,6 +96,20 @@ class ChatCacheService {
   /// Stores the full message rows (including file URLs) so reopening a chat
   /// offline can still render media via the on-disk image cache.
   static Future<void> saveConversationMessages(
+    int currentUserId,
+    int otherUserId,
+    List<Message> messages,
+  ) {
+    return _serializeWrite(
+      _conversationKey(currentUserId, otherUserId),
+      () => _saveConversationUnlocked(currentUserId, otherUserId, messages),
+    );
+  }
+
+  /// The body of [saveConversationMessages] without taking the per-key write
+  /// chain — for callers that already hold it (see [addMessageToCache]).
+  /// Taking it twice on one key would wait on a future that cannot complete.
+  static Future<void> _saveConversationUnlocked(
     int currentUserId,
     int otherUserId,
     List<Message> messages,
@@ -119,23 +155,23 @@ class ChatCacheService {
     int currentUserId,
     int otherUserId,
     Message message,
-  ) async {
-    if (!_initialized) return;
-    final existing = await loadConversationMessages(currentUserId, otherUserId);
+  ) {
+    if (!_initialized) return Future<void>.value();
+    // Load and save inside one critical section — the read and the write have
+    // to be atomic with respect to other writers on this thread.
+    return _serializeWrite(_conversationKey(currentUserId, otherUserId), () async {
+      final existing = await loadConversationMessages(
+        currentUserId,
+        otherUserId,
+      );
 
-    // Check if message already exists (by ID)
-    final messageExists = existing.any((m) => m.id == message.id);
-    if (messageExists) {
-      // Update existing message
-      final updated = existing
-          .map((m) => m.id == message.id ? message : m)
-          .toList();
-      await saveConversationMessages(currentUserId, otherUserId, updated);
-    } else {
-      // Add new message
-      final updated = [message, ...existing];
-      await saveConversationMessages(currentUserId, otherUserId, updated);
-    }
+      // Check if message already exists (by ID)
+      final messageExists = existing.any((m) => m.id == message.id);
+      final updated = messageExists
+          ? existing.map((m) => m.id == message.id ? message : m).toList()
+          : [message, ...existing];
+      await _saveConversationUnlocked(currentUserId, otherUserId, updated);
+    });
   }
 
   /// Synchronously read the decoded tail of a conversation, if it has been
@@ -157,6 +193,42 @@ class ChatCacheService {
     )];
     if (cached == null || cached.isEmpty) return null;
     return List<Message>.unmodifiable(cached);
+  }
+
+  /// Which conversation holds [messageId], as a peer id — or null if no warm
+  /// conversation contains it.
+  ///
+  /// Several socket events (message_deleted, message_edited, task/excalidraw
+  /// updates, message_status_updated) identify only the message, never the
+  /// thread. Without this they cannot be routed to a room at all. Searching the
+  /// decoded tails is a bounded in-memory scan (at most
+  /// [_maxMemoConversations] × [_maxMemoMessages]) and covers exactly the rooms
+  /// that matter: the recently used ones a user is likely to return to.
+  static int? findConversationPeerForMessage(int currentUserId, dynamic messageId) {
+    if (messageId == null) return null;
+    final target = messageId.toString();
+    for (final entry in _conversationMemo.entries) {
+      if (!entry.value.any((m) => m.id.toString() == target)) continue;
+      // Key shape: conversation_<lowId>_<highId>
+      final parts = entry.key.split('_');
+      if (parts.length < 3) continue;
+      final a = int.tryParse(parts[1]);
+      final b = int.tryParse(parts[2]);
+      if (a == null || b == null) continue;
+      // Self-chat has both ends equal, and its "peer" is ourselves.
+      return a == currentUserId ? b : a;
+    }
+    return null;
+  }
+
+  /// Group counterpart of [findConversationPeerForMessage].
+  static int? findGroupForMessage(dynamic messageId) {
+    if (messageId == null) return null;
+    final target = messageId.toString();
+    for (final entry in _groupMemo.entries) {
+      if (entry.value.any((m) => m.id.toString() == target)) return entry.key;
+    }
+    return null;
   }
 
   /// Warm the in-memory tail for a conversation without needing its screen.
@@ -241,6 +313,18 @@ class ChatCacheService {
   static Future<void> saveGroupMessages(
     int groupId,
     List<GroupMessage> messages,
+  ) {
+    return _serializeWrite(
+      _groupConversationKey(groupId),
+      () => _saveGroupUnlocked(groupId, messages),
+    );
+  }
+
+  /// [saveGroupMessages] without taking the write chain — for callers already
+  /// inside it.
+  static Future<void> _saveGroupUnlocked(
+    int groupId,
+    List<GroupMessage> messages,
   ) async {
     if (!_initialized) return;
     final capped = messages.take(_maxMessagesPerThread).toList();
@@ -284,23 +368,18 @@ class ChatCacheService {
   static Future<void> addGroupMessageToCache(
     int groupId,
     GroupMessage message,
-  ) async {
-    if (!_initialized) return;
-    final existing = await loadGroupMessages(groupId);
+  ) {
+    if (!_initialized) return Future<void>.value();
+    return _serializeWrite(_groupConversationKey(groupId), () async {
+      final existing = await loadGroupMessages(groupId);
 
-    // Check if message already exists
-    final messageExists = existing.any((m) => m.id == message.id);
-    if (messageExists) {
-      // Update existing message
-      final updated = existing
-          .map((m) => m.id == message.id ? message : m)
-          .toList();
-      await saveGroupMessages(groupId, updated);
-    } else {
-      // Add new message
-      final updated = [message, ...existing];
-      await saveGroupMessages(groupId, updated);
-    }
+      // Check if message already exists
+      final messageExists = existing.any((m) => m.id == message.id);
+      final updated = messageExists
+          ? existing.map((m) => m.id == message.id ? message : m).toList()
+          : [message, ...existing];
+      await _saveGroupUnlocked(groupId, updated);
+    });
   }
 
   /// Save lobby users snapshot for offline mode.
