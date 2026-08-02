@@ -294,8 +294,21 @@ class MainActivity : FlutterActivity() {
                         } else {
                             startService(serviceIntent)
                         }
-                        Log.d(TAG, "Screen share foreground service started")
-                        result.success(true)
+                        // startForegroundService only SCHEDULES onStartCommand, so
+                        // returning here would tell Dart the service is ready while
+                        // it is still on its way to the foreground. getMediaProjection()
+                        // then fails with "Media projections require a foreground
+                        // service of type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION".
+                        // Wait for the service to confirm before answering.
+                        //
+                        // Off the main thread: onStartCommand runs ON the main thread,
+                        // so blocking it here would deadlock until the timeout.
+                        Thread {
+                            val ready = com.cloudwebrtc.webrtc.FlutterWebRTCForegroundService
+                                .awaitForeground(3000)
+                            Log.d(TAG, "Screen share foreground service ready=$ready")
+                            runOnUiThread { result.success(ready) }
+                        }.start()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error starting foreground service: ${e.message}", e)
                         result.error("FOREGROUND_SERVICE_ERROR", e.message, null)

@@ -708,6 +708,27 @@ class CallService {
   }
 
   /// Send a message via data channel
+  /// Publish a call control message (mic-state, cam-state, force-mute) to the
+  /// peer over the socket.
+  ///
+  /// Not the data channel: that only exists while the peer connection is
+  /// healthy and is torn down and rebuilt by renegotiation, so a mute sent at
+  /// the wrong moment silently never arrived. The web client publishes these
+  /// over the socket too, so both ends use one transport.
+  void sendControlSignal(Map<String, dynamic> payload) {
+    final room = _callRoomId;
+    if (room == null || room.isEmpty) {
+      debugPrint('⚠️ sendControlSignal: no call room, dropping ${payload['type']}');
+      return;
+    }
+    try {
+      _socketService.emit('signal', {'room': room, 'signal': payload});
+      debugPrint('📡 Sent control signal: ${payload['type']}');
+    } catch (e) {
+      debugPrint('❌ Failed to send control signal ${payload['type']}: $e');
+    }
+  }
+
   void sendDataChannelMessage(String message) {
     if (_dataChannel != null &&
         _dataChannel!.state == RTCDataChannelState.RTCDataChannelOpen) {
@@ -1646,27 +1667,73 @@ class CallService {
       debugPrint('🖥️ Starting screen share...');
       debugPrint('🖥️ Preparing native Android screen share flow');
 
-      // On Android, we need to start the foreground service first
-      // This is required for media projection on Android 10+
-      try {
-        const channel = MethodChannel(
-          'com.example.flutter_messenger_v2/screen_share',
-        );
-        debugPrint('🖥️ Invoking startForegroundService via MethodChannel');
-        final result = await channel.invokeMethod('startForegroundService', {
-          'notificationTitle': 'Screen Sharing',
-          'notificationText': 'You are sharing your screen',
-        });
-        debugPrint('🖥️ Foreground service started, result: $result');
-      } catch (e, stack) {
-        debugPrint(
-          '⚠️ Could not start foreground service (may not be needed on this platform): $e',
-        );
-        debugPrint(stack.toString().split('\n').take(5).join('\n'));
+      // ANDROID 14+ ORDERING — consent, then service, then capture.
+      //
+      // Screen capture on targetSdk 34+ is a three-step handshake and every
+      // other ordering crashes the process:
+      //
+      //   * Start the foreground service first and it throws
+      //     "Starting FGS with type mediaProjection ... requires any of
+      //     [CAPTURE_VIDEO_OUTPUT, android:project_media]" — `project_media` is
+      //     an appop the system only grants once the user accepts the capture
+      //     dialog, so pre-consent the service is illegal.
+      //   * Skip the service and getDisplayMedia throws "Media projections
+      //     require a foreground service of type
+      //     FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION" from inside
+      //     MediaProjectionManager.getMediaProjection().
+      //
+      // The plugin calls getMediaProjection() synchronously in its consent
+      // callback, so there is no gap to slot the service into — unless consent
+      // is requested separately first. Helper.requestCapturePermission() does
+      // exactly that: it shows the dialog and caches the projection Intent, and
+      // getDisplayMedia() then reuses that cache instead of asking again
+      // (GetUserMediaImpl.java: `if (mediaProjectionData == null)`).
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        debugPrint('🖥️ Requesting screen capture consent');
+        bool granted = false;
+        try {
+          granted = await Helper.requestCapturePermission();
+        } catch (e) {
+          debugPrint('⚠️ requestCapturePermission failed: $e');
+        }
+        if (!granted) {
+          debugPrint('🖥️ User declined screen capture');
+          return false;
+        }
+
+        // Consent held: the mediaProjection service is legal from here, and has
+        // to be fully in the foreground before capture starts. The native side
+        // now waits for that confirmation rather than returning as soon as
+        // startForegroundService() is dispatched.
+        bool serviceReady = false;
+        try {
+          const channel = MethodChannel(
+            'com.example.flutter_messenger_v2/screen_share',
+          );
+          debugPrint('🖥️ Starting foreground service (consent granted)');
+          serviceReady =
+              await channel.invokeMethod('startForegroundService', {
+                    'notificationTitle': 'Screen Sharing',
+                    'notificationText': 'You are sharing your screen',
+                  }) ==
+                  true;
+          debugPrint('🖥️ Foreground service ready: $serviceReady');
+        } catch (e, stack) {
+          debugPrint('⚠️ Could not start screen-share foreground service: $e');
+          debugPrint(stack.toString().split('\n').take(5).join('\n'));
+        }
+
+        if (!serviceReady) {
+          // Calling getDisplayMedia now would throw "Media projections require
+          // a foreground service...". Stop with something the caller can show
+          // instead of an opaque platform error.
+          debugPrint('❌ Screen-share service never reached the foreground');
+          return false;
+        }
       }
 
       debugPrint(
-        '🖥️ Requesting display media (native screen prompt should appear now)',
+        '🖥️ Requesting display media (reusing granted consent)',
       );
       try {
         _screenStream = await navigator.mediaDevices.getDisplayMedia({
@@ -1689,6 +1756,7 @@ class CallService {
         debugPrint('❌ Failed to get screen stream');
         return false;
       }
+
       debugPrint(
         '🖥️ Display media stream obtained: ${_screenStream!.id}, tracks: ${_screenStream!.getTracks().map((t) => '${t.kind}:${t.id}').join(', ')}',
       );

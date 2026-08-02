@@ -14,6 +14,51 @@ public class FlutterWebRTCForegroundService extends Service {
     private static final String CHANNEL_ID = "screen_share_channel";
     private static final int NOTIFICATION_ID = 9999;
 
+    /**
+     * Whether this service has actually entered the foreground with the
+     * mediaProjection type.
+     *
+     * startForegroundService() only *schedules* onStartCommand — it returns
+     * immediately, so a caller that treats it as "the service is up" races the
+     * main thread. MediaProjectionManager.getMediaProjection() then throws
+     * "Media projections require a foreground service of type
+     * FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION" because the service has not
+     * gotten there yet. Callers await {@link #awaitForeground} instead.
+     */
+    private static final Object FOREGROUND_LOCK = new Object();
+    private static volatile boolean sInForeground = false;
+
+    /** True once the service is genuinely foregrounded, false on timeout. */
+    public static boolean awaitForeground(long timeoutMs) {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        synchronized (FOREGROUND_LOCK) {
+            while (!sInForeground) {
+                final long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) return false;
+                try {
+                    FOREGROUND_LOCK.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return sInForeground;
+                }
+            }
+            return true;
+        }
+    }
+
+    private static void setInForeground(boolean value) {
+        synchronized (FOREGROUND_LOCK) {
+            sInForeground = value;
+            FOREGROUND_LOCK.notifyAll();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        setInForeground(false);
+        super.onDestroy();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -40,20 +85,44 @@ public class FlutterWebRTCForegroundService extends Service {
             try {
                 startForeground(NOTIFICATION_ID, notification,
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
-            } catch (SecurityException e) {
-                // On Android 14+ targeting API 34+, startForeground with
-                // FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION may throw if the
-                // system considers the precondition unmet.  Fall back to a
-                // plain foreground notification so the service doesn't crash
-                // the process; screen-sharing will still be attempted.
+            } catch (Exception e) {
+                // Android 14+ (enforced hard at targetSdk 34+) refuses a
+                // mediaProjection foreground service until the user has granted
+                // screen-capture consent — the `android:project_media` appop.
+                // Starting it before the consent dialog throws here.
                 android.util.Log.w("FlutterWebRTCFGS",
-                        "startForeground(mediaProjection) failed, using plain foreground: " + e);
-                startForeground(NOTIFICATION_ID, notification);
+                        "startForeground(mediaProjection) failed, trying plain foreground: " + e);
+                try {
+                    // The plain call is rejected too: the service is DECLARED as
+                    // foregroundServiceType=mediaProjection in the manifest, so
+                    // the system applies the same precondition either way. This
+                    // second throw used to escape onStartCommand and take the
+                    // whole process down with it (FATAL EXCEPTION in
+                    // ActivityThread.handleServiceArgs).
+                    startForeground(NOTIFICATION_ID, notification);
+                } catch (Exception e2) {
+                    android.util.Log.e("FlutterWebRTCFGS",
+                            "Could not enter foreground at all; stopping service: " + e2);
+                    // Give up cleanly rather than leaving a started service that
+                    // never reached the foreground — the system would kill the
+                    // app for that too.
+                    stopSelf();
+                    return START_NOT_STICKY;
+                }
             }
         } else {
-            startForeground(NOTIFICATION_ID, notification);
+            try {
+                startForeground(NOTIFICATION_ID, notification);
+            } catch (Exception e) {
+                android.util.Log.e("FlutterWebRTCFGS", "startForeground failed: " + e);
+                stopSelf();
+                return START_NOT_STICKY;
+            }
         }
 
+        // Only now is it safe for the caller to start the projection.
+        setInForeground(true);
+        android.util.Log.d("FlutterWebRTCFGS", "Service is in the foreground");
         return START_NOT_STICKY;
     }
 

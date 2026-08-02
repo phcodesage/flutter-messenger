@@ -9,6 +9,7 @@ import '../services/socket_service.dart';
 import '../services/call_notification_service.dart';
 import '../services/pip_service.dart';
 import '../services/presence_service.dart';
+import '../widgets/call_status_badges.dart';
 
 /// Connected call screen that shows during an active call
 /// Displays: Remote video (fullscreen), Local video (PiP), Controls bar
@@ -64,6 +65,12 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
   bool _isRemoteScreenSharing = false;
   bool _isScreenShareTransitioning = false;
   bool _remoteCameraEnabled = true;
+  /// Peer's microphone, as last reported by them. Drives the status badge so
+  /// "why can't I hear you" is answerable at a glance instead of by asking.
+  bool _remoteMicEnabled = true;
+  /// Set while an admin has force-muted us — the mic control is locked out and
+  /// labelled accordingly until they lift it.
+  bool _isAdminMuted = false;
   bool _isNoiseFilterEnabled = false;
 
   // Call duration
@@ -580,6 +587,18 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
           setState(() => _remoteCameraEnabled = enabled);
         }
         break;
+      case 'mic-state':
+        // Was never handled, so the peer's mic status was invisible on mobile.
+        final micOn = _coerceBool(payload['enabled']);
+        if (micOn != null && mounted) {
+          setState(() => _remoteMicEnabled = micOn);
+        }
+        break;
+      case 'force-mute':
+      case 'force_mute':
+        final on = _coerceBool(payload['enabled']) ?? false;
+        _applyAdminForceMute(on);
+        break;
       case 'screen-share':
         final phase = payload['phase']?.toString().toLowerCase();
         if (phase == 'planning' || phase == 'started' || phase == 'start') {
@@ -688,9 +707,8 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
     setState(() {
       _isMicMuted = newMicState;
     });
-    // Send data channel message to remote peer
     // newMicState = _isMicMuted (true = muted), so enabled is the inverse
-    _sendDataChannelMessage({
+    _sendControlSignal({
       'type': 'mic-state',
       'enabled': !newMicState,
       if (_localUserName.isNotEmpty) 'from': _localUserName,
@@ -708,9 +726,8 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
     setState(() {
       _isVideoHidden = newVideoState;
     });
-    // Send data channel message to remote peer
     // newVideoState = _isVideoHidden (true = hidden), so enabled is the inverse
-    _sendDataChannelMessage({
+    _sendControlSignal({
       'type': 'cam-state',
       'enabled': !newVideoState,
       if (_localUserName.isNotEmpty) 'from': _localUserName,
@@ -811,6 +828,68 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
       debugPrint('📤 Sent data channel message: ${message['type']}');
     } catch (e) {
       debugPrint('❌ Error sending data channel message: $e');
+    }
+  }
+
+  /// Device state (mic / camera / force-mute) goes over the socket, matching the
+  /// web client. See CallService.sendControlSignal for why not the data channel.
+  void _sendControlSignal(Map<String, dynamic> message) {
+    try {
+      widget.callService.sendControlSignal(message);
+    } catch (e) {
+      debugPrint('❌ Error sending control signal: $e');
+    }
+  }
+
+  /// Explain why the mic control is inert instead of letting the tap do nothing.
+  void _notifyAdminMuteLocked() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('An admin muted you — they need to unmute you'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// An admin muted (or unmuted) us from the other end.
+  ///
+  /// Mirrors enforceAdminForceMute() on web: silence the track, lock the mic
+  /// control so it cannot be undone locally, and report the resulting state back
+  /// so the admin's own indicator confirms the mute landed. The reply carries
+  /// reason:'admin-force' so the admin's client updates its badge without also
+  /// announcing "the peer muted their mic" on top of its own "You muted them".
+  void _applyAdminForceMute(bool muted) {
+    final stream = widget.localStream ?? widget.callService.localStream;
+    if (stream != null) {
+      for (final track in stream.getAudioTracks()) {
+        track.enabled = !muted;
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _isAdminMuted = muted;
+        _isMicMuted = muted;
+      });
+    }
+
+    _sendControlSignal({
+      'type': 'mic-state',
+      'enabled': !muted,
+      'reason': 'admin-force',
+      if (_localUserName.isNotEmpty) 'from': _localUserName,
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(muted
+              ? 'You have been muted by an admin'
+              : 'Admin lifted your mute'),
+          backgroundColor: muted ? const Color(0xFFD93025) : const Color(0xFF558B2F),
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -1076,6 +1155,20 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
                     // Local video (PiP, draggable) - hide in PiP mode
                     if (!_isInPipMode) _buildLocalVideoPiP(),
 
+                    // Our own mic state in an audio call. The local preview
+                    // carries this badge in a video call, but that preview is
+                    // not rendered when there is no video — without this you
+                    // could see the peer's mic status and not your own.
+                    if (!_isInPipMode && widget.callType == 'audio')
+                      Positioned(
+                        right: 12,
+                        bottom: _showControls ? 190 : 24,
+                        child: CallStatusBadges(
+                          micOn: !_isMicMuted,
+                          isSelf: true,
+                        ),
+                      ),
+
                     // Top bar with call info - hide in PiP mode
                     if (_showControls && !_isInPipMode) _buildTopBar(),
 
@@ -1170,6 +1263,17 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
             ),
           ),
+          // Peer's real mic / camera state, top-right, for as long as it lasts.
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 12,
+            right: 12,
+            child: CallStatusBadges(
+              micOn: _remoteMicEnabled,
+              // No camera pill in an audio call — there is no video in play.
+              cameraOn: widget.callType == 'audio' ? null : _remoteCameraEnabled,
+              isSelf: false,
+            ),
+          ),
           // Screen share indicator
           if (_isRemoteScreenSharing)
             Positioned(
@@ -1248,13 +1352,28 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
               ),
             ],
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: RTCVideoView(
-              _localRenderer,
-              mirror: _isFrontCamera, // Mirror only for front cameras
-              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
+          child: Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: RTCVideoView(
+                  _localRenderer,
+                  mirror: _isFrontCamera, // Mirror only for front cameras
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
+              ),
+              // Our own state, bottom-right of the preview — matches web.
+              Positioned(
+                bottom: 6,
+                right: 6,
+                child: CallStatusBadges(
+                  micOn: !_isMicMuted,
+                  cameraOn: !_isVideoHidden,
+                  isSelf: true,
+                  compact: true,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1365,11 +1484,17 @@ class _ConnectedCallScreenState extends State<ConnectedCallScreen>
   Widget _buildBottomControls() {
     final controls = <Widget>[
       _buildControlButton(
-        label: _isMicMuted ? 'Unmute mic' : 'Mute mic',
-        backgroundColor: _isMicMuted
-            ? const Color(0xFF64748B)
-            : const Color(0xFF22C55E),
-        onTap: _toggleMic,
+        // Locked out while an admin holds the mute — tapping cannot undo it, so
+        // the control says who did it rather than offering an action that fails.
+        label: _isAdminMuted
+            ? 'Muted by Admin'
+            : (_isMicMuted ? 'Unmute mic' : 'Mute mic'),
+        backgroundColor: _isAdminMuted
+            ? const Color(0xFFD93025)
+            : (_isMicMuted
+                ? const Color(0xFF64748B)
+                : const Color(0xFF22C55E)),
+        onTap: _isAdminMuted ? _notifyAdminMuteLocked : _toggleMic,
         onLongPress: () => _showDeviceSelector('mic'),
       ),
       if (widget.callType == 'video')
