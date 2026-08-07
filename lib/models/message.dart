@@ -532,10 +532,18 @@ class Message {
     return parsed.toLocal();
   }
 
+  /// Prefer the epoch value because it represents an absolute instant. Local
+  /// optimistic messages historically used an ISO string without an offset,
+  /// while server timestamps are UTC; parsing both strings as UTC made the
+  /// pending bubble jump by the device timezone when the server echo arrived.
+  DateTime get _displayDateTime => timestampMs > 0
+      ? DateTime.fromMillisecondsSinceEpoch(timestampMs)
+      : _parseUtcTimestamp(timestamp);
+
   /// Format timestamp for display (short format for message bubbles)
   String get formattedTime {
     try {
-      final dateTime = _parseUtcTimestamp(timestamp);
+      final dateTime = _displayDateTime;
       final now = DateTime.now();
       final difference = now.difference(dateTime);
 
@@ -568,7 +576,7 @@ class Message {
   /// Format: [MM/DD/YYYY, HH:MM:SS GMT+offset]
   String get formattedTimestampFull {
     try {
-      final dateTime = _parseUtcTimestamp(timestamp);
+      final dateTime = _displayDateTime;
 
       // Format date parts
       final month = dateTime.month.toString().padLeft(2, '0');

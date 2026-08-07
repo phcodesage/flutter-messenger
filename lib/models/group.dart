@@ -887,11 +887,15 @@ class GroupMessage {
     };
   }
 
+  DateTime get _displayDateTime => timestampMs > 0
+      ? DateTime.fromMillisecondsSinceEpoch(timestampMs)
+      : DateTime.parse(timestamp).toLocal();
+
   /// Format timestamp for display
   String get formattedTime {
     try {
       // debugPrint('🕐 [TIMESTAMP DEBUG] Raw timestamp: "$timestamp"');
-      final dateTime = DateTime.parse(timestamp).toLocal();
+      final dateTime = _displayDateTime;
       // debugPrint('🕐 [TIMESTAMP DEBUG] Parsed dateTime: $dateTime');
       final now = DateTime.now();
       // debugPrint('🕐 [TIMESTAMP DEBUG] Current time: $now');
@@ -932,7 +936,7 @@ class GroupMessage {
   /// Format: [MM/DD/YYYY, HH:MM:SS GMT+offset]
   String get formattedTimestampFull {
     try {
-      final dateTime = DateTime.parse(timestamp).toLocal();
+      final dateTime = _displayDateTime;
 
       // Format date parts
       final month = dateTime.month.toString().padLeft(2, '0');
