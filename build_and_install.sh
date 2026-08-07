@@ -59,12 +59,35 @@ connected_device_count() {
   adb devices | awk 'NR>1 && $2=="device" {count++} END {print count+0}'
 }
 
+remove_samsung_dual_app_clone() {
+  local app_id="$1"
+  local dual_user_id
+
+  while IFS= read -r dual_user_id; do
+    [[ -z "$dual_user_id" ]] && continue
+    if adb shell pm list packages --user "$dual_user_id" \
+      | grep -qx "package:$app_id"; then
+      echo "Removing orphaned Samsung Dual Messenger copy (user $dual_user_id)..."
+      adb shell pm uninstall --user "$dual_user_id" "$app_id" >/dev/null || {
+        echo "Warning: Could not remove Dual Messenger copy for user $dual_user_id." >&2
+      }
+    fi
+  done < <(
+    adb shell pm list users \
+      | sed -n 's/.*UserInfo{\([0-9][0-9]*\):DUAL_APP:.*/\1/p'
+  )
+}
+
 install_apk() {
   local apk_path="$1"
   local app_id="$2"
   local install_output status
 
-  install_output="$(adb install -r "$apk_path" 2>&1)"
+  # Samsung's hidden DUAL_APP profile can retain ChatX even when the app is no
+  # longer listed under Settings > Dual Messenger. Remove only ChatX from that
+  # profile, then install explicitly for the phone owner.
+  remove_samsung_dual_app_clone "$app_id"
+  install_output="$(adb install --user 0 -r "$apk_path" 2>&1)"
   status=$?
   if [[ -n "$install_output" ]]; then
     echo "$install_output"
@@ -80,11 +103,11 @@ install_apk() {
     echo "Package: $app_id"
     read -r -p "Uninstall the existing app and reinstall? This removes app data. (y/N): " remove_existing
     if [[ "$remove_existing" == "y" || "$remove_existing" == "Y" ]]; then
-      adb uninstall "$app_id" || {
+      adb uninstall --user 0 "$app_id" || {
         echo "Could not uninstall the existing app." >&2
         return 1
       }
-      adb install "$apk_path"
+      adb install --user 0 "$apk_path"
       return $?
     fi
   fi
@@ -148,7 +171,7 @@ if [[ "$SKIP_INSTALL" != true ]]; then
   if [[ "$install_device_count" -eq 0 ]]; then
     echo "No devices connected. Skipping installation."
     echo "APK location: $APK_PATH"
-    echo "Manual install: adb install -r \"$APK_PATH\""
+    echo "Manual install: adb install --user 0 -r \"$APK_PATH\""
   else
     echo
     echo "========================================"
@@ -162,7 +185,7 @@ if [[ "$SKIP_INSTALL" != true ]]; then
       echo "1. Make sure USB debugging is enabled"
       echo "2. Check device authorization prompt"
       echo "3. If package conflict, uninstall $PACKAGE_NAME and retry"
-      echo "4. Manual install: adb install -r \"$APK_PATH\""
+      echo "4. Manual install: adb install --user 0 -r \"$APK_PATH\""
       exit 1
     fi
 

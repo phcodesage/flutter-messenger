@@ -29,7 +29,7 @@ Or manually:
 flutter clean
 flutter pub get
 flutter build apk --release
-adb install -r build/app/outputs/flutter-apk/app-release.apk
+adb install --user 0 -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
 ### 2. Test the Screenshare Fix

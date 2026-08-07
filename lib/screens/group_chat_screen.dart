@@ -311,6 +311,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   void initState() {
     super.initState();
+    // A null lobby preview means this group has no message history. Do not
+    // imply otherwise with a skeleton while confirming that empty state.
+    _isLoading = widget.group.lastMessage != null;
     _inputFocusNode.addListener(_onFocusChange);
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_syncCommonPhrasesVisibility);
@@ -1035,7 +1038,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final hasCachedMessages = _messages.isNotEmpty;
     setState(() {
       _isLoadingMessages = true;
-      if (!hasCachedMessages) {
+      if (!hasCachedMessages && widget.group.lastMessage != null) {
         _isLoading = true;
       }
     });

@@ -7,13 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The backend is a Flask API. Its URL and all endpoint paths are defined in `lib/config/api_config.dart` (`ApiConfig`); the base URL is injected from `.env.json` at build time, defaulting to `https://web.flask-call-app.site/`.
 - Copy `.env.json.example` to `.env.json` (gitignored) and set `BASE_URL`.
 - **Every `flutter run` / `flutter build` must pass `--dart-define-from-file=.env.json`** — without it `BASE_URL` falls back to the default and won't match your environment. This flag also feeds `BuildConfig.BASE_URL` to native Android code.
+- **Every Android `flutter run` must also pass `--device-user=0`.** A plain `flutter run` installs into Samsung's hidden `DUAL_APP` user as well as the owner profile, producing a duplicate ChatX icon that is not removable from the Dual Messenger settings UI.
 - Release Android builds require `android/key.properties` (gitignored: storeFile, storePassword, keyAlias, keyPassword). Without it, release signing falls back to debug.
 - `lib/firebase_options.dart` is a placeholder — run `flutterfire configure` to populate it before relying on Firebase/FCM.
 
 ## Commands
 
 ```bash
-flutter run --dart-define-from-file=.env.json          # run on device/emulator
+flutter run --device-user=0 --dart-define-from-file=.env.json  # Android owner profile only
+flutter run --release --device-user=0 --dart-define-from-file=.env.json
 flutter build apk --dart-define-from-file=.env.json    # release APK
 flutter analyze                                         # static analysis / lint (run after edits)
 flutter test                                            # unit/widget tests (sparse coverage)

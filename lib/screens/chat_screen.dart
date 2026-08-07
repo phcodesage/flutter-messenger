@@ -434,6 +434,11 @@ class _ChatScreenState extends State<ChatScreen>
     return currentUserId != null && widget.otherUser.id == currentUserId;
   }
 
+  bool get _hasKnownConversationHistory =>
+      widget.otherUser.unreadCount > 0 ||
+      (widget.otherUser.lastMessage?.trim().isNotEmpty ?? false) ||
+      (widget.otherUser.lastMessageTime?.trim().isNotEmpty ?? false);
+
   /// Return a short display name for use inside the chat area (prefer first name).
   String _chatDisplayNameFromSender(String? senderName) {
     if (senderName == null) return widget.otherUser.firstName;
@@ -480,6 +485,10 @@ class _ChatScreenState extends State<ChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Lobby metadata already knows when a conversation has never had a
+    // message. Show the honest empty state immediately in that case instead
+    // of six fake bubbles that can only disappear into "No messages yet".
+    _isLoading = _hasKnownConversationHistory;
     _seedMessagesFromWarmCache();
     // Seed from the app-wide cache so the first keyboard open snaps instantly.
     if (_lastKnownKeyboardInsetGlobal > 0) {
