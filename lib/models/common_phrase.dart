@@ -1,5 +1,11 @@
 /// Model for common phrases used in quick messaging
 class CommonPhrase {
+  static const List<CommonPhrase> preloadedDefaults = <CommonPhrase>[
+    CommonPhrase(id: null, phrase: 'How are things coming?', usageCount: 0, isDefault: true, isCustom: false),
+    CommonPhrase(id: null, phrase: 'Can we do a quick sync?', usageCount: 0, isDefault: true, isCustom: false),
+    CommonPhrase(id: null, phrase: 'Thanks, got it.', usageCount: 0, isDefault: true, isCustom: false),
+  ];
+
   final int? id;
   final String phrase;
   final int usageCount;
@@ -40,6 +46,17 @@ class CommonPhrase {
           : null,
     );
   }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'phrase': phrase,
+    'usage_count': usageCount,
+    'is_default': isDefault,
+    'is_custom': isCustom,
+    'pin_order_web': pinOrderWeb,
+    'pin_order_mobile': pinOrderMobile,
+    'last_used_at': lastUsedAt?.toIso8601String(),
+  };
 
   @override
   String toString() =>

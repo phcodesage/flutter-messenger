@@ -358,8 +358,9 @@ class _ChatScreenState extends State<ChatScreen>
 
   // Common phrases state
   late CommonPhrasesApi _commonPhrasesApi;
-  List<CommonPhrase> _commonPhrases = const [];
+  List<CommonPhrase> _commonPhrases = CommonPhrase.preloadedDefaults;
   bool _hideCommonPhrases = false;
+  Timer? _commonPhrasesSyncTimer;
 
   // Emoji picker state for chat input
   bool _showEmojiPicker = false;
@@ -678,6 +679,7 @@ class _ChatScreenState extends State<ChatScreen>
     if (state == AppLifecycleState.resumed && _suppressRestoreOnNextResume) {
       _isAppInForeground = true;
       ActiveChatService().setActiveUser(widget.otherUser.id);
+      unawaited(_loadCommonPhrases());
       _suppressRestoreOnNextResume = false;
       _restoreInputFocusOnResume = false;
       _keepInputUnfocused();
@@ -687,6 +689,7 @@ class _ChatScreenState extends State<ChatScreen>
     if (state == AppLifecycleState.resumed) {
       _isAppInForeground = true;
       ActiveChatService().setActiveUser(widget.otherUser.id);
+      unawaited(_loadCommonPhrases());
     }
 
     if (state == AppLifecycleState.resumed && _restoreInputFocusOnResume) {
@@ -1091,7 +1094,10 @@ class _ChatScreenState extends State<ChatScreen>
     _partnerLastSeen = widget.otherUser.lastSeen;
 
     // Initialize common phrases API
-    _commonPhrasesApi = CommonPhrasesApi(baseUrl: ApiConfig.baseUrl);
+    _commonPhrasesApi = CommonPhrasesApi(
+      baseUrl: ApiConfig.baseUrl,
+      recipientId: widget.otherUser.id,
+    );
 
     _joinChatRoom();
     _setupRealtimeListeners();
@@ -1109,8 +1115,11 @@ class _ChatScreenState extends State<ChatScreen>
     unawaited(_loadPinnedExcalidrawLinks());
     unawaited(_refreshExcalidrawRoomsUnread());
 
-    // Load common phrases in background
-    unawaited(_loadCommonPhrases());
+    // Paint cached/default chips immediately, then reconcile with the server.
+    unawaited(_preloadCommonPhrases());
+    _commonPhrasesSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_isAppInForeground) unawaited(_loadCommonPhrases());
+    });
     // Fetch all task-marked messages for this conversation in the background
     // so the task modal shows the full count, not just the loaded page.
     unawaited(_loadConversationTasks());
@@ -1597,6 +1606,18 @@ class _ChatScreenState extends State<ChatScreen>
 
   void _setupRealtimeListeners() {
     const key = 'chat';
+
+    _socketService.addRawListener(
+      'common_phrases_updated',
+      'chat-common-phrases',
+      (dynamic rawData) {
+        if (rawData is! Map) return;
+        final data = Map<String, dynamic>.from(rawData);
+        if (data['room_id'] == _commonPhrasesRoomId) {
+          unawaited(_loadCommonPhrases());
+        }
+      },
+    );
 
     // Auto-retry any queued media uploads when the socket reconnects
     // (covers both wifi-restored and app-resume scenarios).
@@ -3625,36 +3646,43 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  /// Load common phrases from server
-  /// Pinned phrases (server-side, max 2 on mobile) are shown first on the bar.
+  String? get _commonPhrasesRoomId {
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) return null;
+    final ids = <int>[currentUserId, widget.otherUser.id]..sort();
+    return 'thread_${ids[0]}_${ids[1]}';
+  }
+
+  Future<void> _preloadCommonPhrases() async {
+    final cached = await _commonPhrasesApi.loadCached();
+    if (cached.isNotEmpty) _applyCommonPhrases(cached, source: 'cache');
+    await _loadCommonPhrases();
+  }
+
+  void _applyCommonPhrases(List<CommonPhrase> phrases, {required String source}) {
+    final sorted = [...phrases]
+      ..sort((a, b) {
+        if (a.isPinnedMobile && b.isPinnedMobile) {
+          return (a.pinOrderMobile ?? 99).compareTo(b.pinOrderMobile ?? 99);
+        }
+        if (a.isPinnedMobile) return -1;
+        if (b.isPinnedMobile) return 1;
+        return b.usageCount.compareTo(a.usageCount);
+      });
+    final visible = sorted.take(3).toList(growable: false);
+    if (mounted) {
+      setState(() => _commonPhrases = visible);
+    }
+    debugPrint(
+      '📝 Loaded ${sorted.length} phrases from $source; ${visible.length} shown on bar',
+    );
+  }
+
+  /// Load room-scoped phrases from the server, with mobile pins ranked first.
   Future<void> _loadCommonPhrases() async {
     try {
       final phrases = await _commonPhrasesApi.fetch(limit: 8);
-
-      // Sort: mobile-pinned first (ascending pinOrderMobile), then by usage_count desc.
-      final sorted = [...phrases]
-        ..sort((a, b) {
-          if (a.isPinnedMobile && b.isPinnedMobile) {
-            return (a.pinOrderMobile ?? 99).compareTo(b.pinOrderMobile ?? 99);
-          }
-          if (a.isPinnedMobile) return -1;
-          if (b.isPinnedMobile) return 1;
-          return b.usageCount.compareTo(a.usageCount);
-        });
-
-      // Only show mobile-pinned phrases on the quick bar (max 2)
-      final pinnedOnly = sorted
-          .where((p) => p.isPinnedMobile)
-          .take(_kMobileMaxPins)
-          .toList(growable: false);
-      if (mounted) {
-        setState(() {
-          _commonPhrases = pinnedOnly;
-        });
-      }
-      debugPrint(
-        '📝 Loaded ${sorted.length} phrases; ${pinnedOnly.length} pinned shown on bar',
-      );
+      _applyCommonPhrases(phrases, source: 'server');
     } catch (e) {
       debugPrint('❌ Error loading common phrases: $e');
       // Silently fail - this is a non-critical feature
@@ -6125,7 +6153,7 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  static const int _kMobileMaxPins = 2;
+  static const int _kMobileMaxPins = 3;
 
   Future<void> _showCommonPhrasesModal() async {
     final TextEditingController phraseInputController = TextEditingController();
@@ -11833,6 +11861,7 @@ class _ChatScreenState extends State<ChatScreen>
     _inputModeSwitchTimer?.cancel();
     _emojiSwitchTimer?.cancel();
     _emojiCollapseTimer?.cancel();
+    _commonPhrasesSyncTimer?.cancel();
     _keyboardInsetNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _retryProgressSubscription?.cancel();
@@ -11875,6 +11904,10 @@ class _ChatScreenState extends State<ChatScreen>
 
     // Clear all chat socket listeners (does NOT affect lobby listeners)
     _socketService.removeListenersForKey('chat');
+    _socketService.removeRawListener(
+      'common_phrases_updated',
+      'chat-common-phrases',
+    );
 
     super.dispose();
   }

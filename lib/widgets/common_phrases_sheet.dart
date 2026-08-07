@@ -6,7 +6,7 @@ import '../models/common_phrase.dart';
 import '../services/common_phrases_api.dart';
 
 /// Max number of mobile-pinned phrases shown on the quick bar.
-const int kMobileMaxPins = 2;
+const int kMobileMaxPins = 3;
 
 /// Shows the Common Phrases management bottom sheet (add / generate / pin /
 /// delete). Shared by 1-on-1 and group chat. [onChanged] is invoked after the

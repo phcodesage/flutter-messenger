@@ -15,11 +15,60 @@ class CommonPhrasesApi {
 
   CommonPhrasesApi({
     required this.baseUrl,
+    this.recipientId,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
   final String baseUrl;
+  final int? recipientId;
   final http.Client _client;
+
+  Uri _roomUri(String path, [Map<String, String> query = const {}]) {
+    final peerId = recipientId;
+    if (peerId == null || peerId <= 0) {
+      throw StateError('A direct-message recipient is required');
+    }
+    return Uri.parse('$baseUrl${ApiConfig.mobilePrefix}$path').replace(
+      queryParameters: <String, String>{
+        ...query,
+        'recipient_id': peerId.toString(),
+      },
+    );
+  }
+
+  Future<String?> _cacheKey() async {
+    final userId = await StorageService.getUserId();
+    final peerId = recipientId;
+    if (userId == null || peerId == null) return null;
+    return 'common_phrases:$userId:$peerId';
+  }
+
+  Future<List<CommonPhrase>> loadCached() async {
+    try {
+      final key = await _cacheKey();
+      if (key == null) return const <CommonPhrase>[];
+      final raw = (await StorageService.getPreferences()).getString(key);
+      if (raw == null || raw.isEmpty) return const <CommonPhrase>[];
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      return decoded.whereType<Map<String, dynamic>>()
+          .map(CommonPhrase.fromJson).toList(growable: false);
+    } catch (_) {
+      return const <CommonPhrase>[];
+    }
+  }
+
+  Future<void> _saveCached(List<CommonPhrase> phrases) async {
+    try {
+      final key = await _cacheKey();
+      if (key == null) return;
+      await (await StorageService.getPreferences()).setString(
+        key,
+        jsonEncode(phrases.map((phrase) => phrase.toJson()).toList()),
+      );
+    } catch (_) {
+      // Cache failures must never block the live API result.
+    }
+  }
 
   Future<Map<String, String>> _headers() async {
     final token = await StorageService.getToken();
@@ -34,9 +83,9 @@ class CommonPhrasesApi {
   Future<List<CommonPhrase>> fetch({int limit = 8}) async {
     try {
       _trace('🔍 Fetching common phrases with limit: $limit');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases?limit=$limit',
-      );
+      final uri = _roomUri('/messages/common-phrases', {
+        'limit': '${limit < 3 ? 3 : limit}',
+      });
       final res = await _client.get(uri, headers: await _headers());
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -54,6 +103,8 @@ class CommonPhrasesApi {
           .map(CommonPhrase.fromJson)
           .toList();
 
+      await _saveCached(list);
+
       _trace('📦 Fetched ${list.length} common phrases');
       return list;
     } catch (e) {
@@ -66,13 +117,11 @@ class CommonPhrasesApi {
   Future<void> trackUse(String phrase) async {
     try {
       _trace('📝 Tracking phrase usage: $phrase');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases/use',
-      );
+      final uri = _roomUri('/messages/common-phrases/use');
       final res = await _client.post(
         uri,
         headers: await _headers(),
-        body: jsonEncode({'phrase': phrase}),
+        body: jsonEncode({'phrase': phrase, 'recipient_id': recipientId}),
       );
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -95,13 +144,11 @@ class CommonPhrasesApi {
   Future<CommonPhrase> savePhrase(String phrase) async {
     try {
       _trace('📝 Saving custom phrase: $phrase');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases',
-      );
+      final uri = _roomUri('/messages/common-phrases');
       final res = await _client.post(
         uri,
         headers: await _headers(),
-        body: jsonEncode({'phrase': phrase}),
+        body: jsonEncode({'phrase': phrase, 'recipient_id': recipientId}),
       );
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -163,13 +210,11 @@ class CommonPhrasesApi {
     }
   }
 
-  /// Pin a phrase server-side (mobile max: 2)
+  /// Pin a phrase server-side (mobile max: 3)
   Future<CommonPhrase> pinPhrase(int phraseId) async {
     try {
       _trace('📌 Pinning phrase $phraseId');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases/$phraseId/pin',
-      );
+      final uri = _roomUri('/messages/common-phrases/$phraseId/pin');
       final res = await _client.post(uri, headers: await _headers());
 
       if (res.statusCode == 400) {
@@ -195,9 +240,7 @@ class CommonPhrasesApi {
   Future<CommonPhrase> unpinPhrase(int phraseId) async {
     try {
       _trace('📌 Unpinning phrase $phraseId');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases/$phraseId/unpin',
-      );
+      final uri = _roomUri('/messages/common-phrases/$phraseId/unpin');
       final res = await _client.post(uri, headers: await _headers());
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -219,13 +262,14 @@ class CommonPhrasesApi {
   Future<void> reorderPins(List<int> phraseIds) async {
     try {
       _trace('🔀 Reordering pins: $phraseIds');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases/pins/reorder',
-      );
+      final uri = _roomUri('/messages/common-phrases/pins/reorder');
       final res = await _client.post(
         uri,
         headers: await _headers(),
-        body: jsonEncode({'phrase_ids': phraseIds}),
+        body: jsonEncode({
+          'phrase_ids': phraseIds,
+          'recipient_id': recipientId,
+        }),
       );
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -242,9 +286,7 @@ class CommonPhrasesApi {
   Future<void> deletePhrase(int phraseId) async {
     try {
       _trace('🗑️ Deleting phrase with ID: $phraseId');
-      final uri = Uri.parse(
-        '$baseUrl${ApiConfig.mobilePrefix}/messages/common-phrases/$phraseId',
-      );
+      final uri = _roomUri('/messages/common-phrases/$phraseId');
       final res = await _client.delete(uri, headers: await _headers());
 
       if (res.statusCode < 200 || res.statusCode >= 300) {

@@ -37,8 +37,8 @@ class CommonPhraseBar extends StatelessWidget {
       return '$firstLine\n$secondLine';
     }
 
-    // Show at most 2 phrases for now.
-    final visiblePhrases = phrases.take(2).toList();
+    // Keep three room-scoped quick replies visible in the chat composer.
+    final visiblePhrases = phrases.take(3).toList();
     
     // Calculate total text length to distribute space dynamically
     final totalLength = visiblePhrases.fold(0, (sum, p) => sum + p.phrase.length);
