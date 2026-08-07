@@ -30,9 +30,10 @@ class ChatCacheService {
   static final List<String> _memoOrder = [];
 
   static void _rememberConversation(String key, List<Message> messages) {
-    _conversationMemo[key] = messages.length > _maxMemoMessages
-        ? messages.sublist(messages.length - _maxMemoMessages)
-        : List<Message>.from(messages);
+    final chronological = _chronologicalMessages(messages);
+    _conversationMemo[key] = chronological.length > _maxMemoMessages
+        ? chronological.sublist(chronological.length - _maxMemoMessages)
+        : chronological;
     _memoOrder.remove(key);
     _memoOrder.add(key);
     while (_memoOrder.length > _maxMemoConversations) {
@@ -120,7 +121,10 @@ class ChatCacheService {
     }
 
     final key = _conversationKey(currentUserId, otherUserId);
-    final capped = messages.take(_maxMessagesPerThread).toList();
+    final chronological = _chronologicalMessages(messages);
+    final capped = chronological.length > _maxMessagesPerThread
+        ? chronological.sublist(chronological.length - _maxMessagesPerThread)
+        : chronological;
 
     debugPrint('💾 Saving ${capped.length} messages to cache with key: $key');
 
@@ -169,7 +173,7 @@ class ChatCacheService {
       final messageExists = existing.any((m) => m.id == message.id);
       final updated = messageExists
           ? existing.map((m) => m.id == message.id ? message : m).toList()
-          : [message, ...existing];
+          : [...existing, message];
       await _saveConversationUnlocked(currentUserId, otherUserId, updated);
     });
   }
@@ -271,11 +275,27 @@ class ChatCacheService {
     final rawList = (data['messages'] as List?) ?? const [];
     debugPrint('📦 Cache has ${rawList.length} messages');
 
-    final decoded = rawList
-        .map((item) => Message.fromJson(Map<String, dynamic>.from(item as Map)))
-        .toList();
+    final decoded = _chronologicalMessages(
+      rawList
+          .map((item) => Message.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList(),
+    );
     _rememberConversation(key, decoded);
     return decoded;
+  }
+
+  /// Cache rows are always oldest -> newest. Sorting on both read and write
+  /// also repairs snapshots created by older builds, where socket messages
+  /// were accidentally prepended and could briefly put old history at the
+  /// bottom of a newly opened reverse chat list.
+  static List<Message> _chronologicalMessages(List<Message> messages) {
+    final sorted = List<Message>.from(messages);
+    sorted.sort((a, b) {
+      final byTime = a.timestampMs.compareTo(b.timestampMs);
+      if (byTime != 0) return byTime;
+      return a.id.compareTo(b.id);
+    });
+    return sorted;
   }
 
   /// Decoded tails for groups, same purpose and bounds as [_conversationMemo].
@@ -283,9 +303,10 @@ class ChatCacheService {
   static final List<int> _groupMemoOrder = [];
 
   static void _rememberGroup(int groupId, List<GroupMessage> messages) {
-    _groupMemo[groupId] = messages.length > _maxMemoMessages
-        ? messages.sublist(messages.length - _maxMemoMessages)
-        : List<GroupMessage>.from(messages);
+    final chronological = _chronologicalGroupMessages(messages);
+    _groupMemo[groupId] = chronological.length > _maxMemoMessages
+        ? chronological.sublist(chronological.length - _maxMemoMessages)
+        : chronological;
     _groupMemoOrder.remove(groupId);
     _groupMemoOrder.add(groupId);
     while (_groupMemoOrder.length > _maxMemoConversations) {
@@ -327,7 +348,10 @@ class ChatCacheService {
     List<GroupMessage> messages,
   ) async {
     if (!_initialized) return;
-    final capped = messages.take(_maxMessagesPerThread).toList();
+    final chronological = _chronologicalGroupMessages(messages);
+    final capped = chronological.length > _maxMessagesPerThread
+        ? chronological.sublist(chronological.length - _maxMessagesPerThread)
+        : chronological;
 
     // Don't strip file URLs anymore - preserve all data for proper display
     final cachedMessages = capped.map((m) => _stripGroupFileData(m)).toList();
@@ -354,14 +378,28 @@ class ChatCacheService {
     final data = _groupChatBox.get(_groupConversationKey(groupId));
     if (data == null) return [];
     final rawList = (data['messages'] as List?) ?? const [];
-    final decoded = rawList
-        .map(
-          (item) =>
-              GroupMessage.fromJson(Map<String, dynamic>.from(item as Map)),
-        )
-        .toList();
+    final decoded = _chronologicalGroupMessages(
+      rawList
+          .map(
+            (item) =>
+                GroupMessage.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList(),
+    );
     _rememberGroup(groupId, decoded);
     return decoded;
+  }
+
+  static List<GroupMessage> _chronologicalGroupMessages(
+    List<GroupMessage> messages,
+  ) {
+    final sorted = List<GroupMessage>.from(messages);
+    sorted.sort((a, b) {
+      final byTime = a.timestampMs.compareTo(b.timestampMs);
+      if (byTime != 0) return byTime;
+      return a.id.compareTo(b.id);
+    });
+    return sorted;
   }
 
   /// Add a single group message to the cache.
@@ -377,7 +415,7 @@ class ChatCacheService {
       final messageExists = existing.any((m) => m.id == message.id);
       final updated = messageExists
           ? existing.map((m) => m.id == message.id ? message : m).toList()
-          : [message, ...existing];
+          : [...existing, message];
       await _saveGroupUnlocked(groupId, updated);
     });
   }

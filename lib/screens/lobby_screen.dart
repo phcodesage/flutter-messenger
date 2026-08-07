@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -2278,14 +2279,39 @@ class _LobbyScreenState extends State<LobbyScreen> with WidgetsBindingObserver {
     List<Group> groups,
   ) async {
     const preloadCount = 8;
+    if (!mounted) return;
+
+    final maxBubbleWidth = math.min(
+      MediaQuery.of(context).size.width * 0.70,
+      560.0,
+    );
+    final imageCacheWidth = ((maxBubbleWidth * MediaQuery.of(context).devicePixelRatio)
+            .round()
+            .clamp(320, 2048));
+
     for (final user in users.take(preloadCount)) {
       if (!mounted) return;
       await ChatCacheService.preloadConversation(userId, user.id);
+
+      final cachedMsgs = await ChatCacheService.loadConversationMessages(userId, user.id);
+      for (final msg in cachedMsgs.take(10)) {
+        if ((msg.messageType == 'image' || msg.messageType == 'photo') && msg.fileUrl != null && msg.fileUrl!.isNotEmpty) {
+          CachedImage.precache(context, msg.fileUrl!, cacheWidth: imageCacheWidth);
+          CachedImage.precache(context, msg.fileUrl!);
+        }
+      }
       await Future<void>.delayed(Duration.zero);
     }
     for (final group in groups.take(preloadCount)) {
       if (!mounted) return;
       await ChatCacheService.preloadGroup(group.id);
+
+      final cachedMsgs = await ChatCacheService.loadGroupMessages(group.id);
+      for (final msg in cachedMsgs.take(10)) {
+        if ((msg.messageType == 'image' || msg.messageType == 'photo') && msg.fileUrl != null && msg.fileUrl!.isNotEmpty) {
+          CachedImage.precache(context, msg.fileUrl!);
+        }
+      }
       await Future<void>.delayed(Duration.zero);
     }
   }

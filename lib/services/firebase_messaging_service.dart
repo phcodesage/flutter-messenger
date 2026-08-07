@@ -20,6 +20,9 @@ import 'storage_service.dart';
 import 'version_service.dart';
 import '../config/api_config.dart';
 import '../utils/notification_handler.dart';
+import 'message_service.dart';
+import 'group_service.dart';
+import 'media_preload_service.dart';
 
 const String _chatQuickReplyInputActionId = 'chat_reply_input';
 const int _appUpdateNotificationId = 9001;
@@ -354,6 +357,61 @@ List<AndroidNotificationAction> _buildChatQuickReplyActions(
   ];
 }
 
+/// Background sync logic to pre-fetch conversations and media on FCM push receipt
+Future<void> _performBackgroundSync(Map<String, dynamic> data) async {
+  try {
+    debugPrint('💾 FCM Background Sync: Initializing storage and cache...');
+    await StorageService.init();
+    await ChatCacheService.init();
+
+    final userId = await StorageService.getUserId();
+    final token = await StorageService.getToken();
+
+    if (userId == null || token == null || token.isEmpty) {
+      debugPrint('💾 FCM Background Sync: No authenticated user found. Skipping.');
+      return;
+    }
+
+    // Initialize media preloader so we can pre-download files/media
+    await MediaPreloadService.instance.start();
+
+    // Check conversation type
+    final isGroup = data['conversation_type'] == 'group';
+    if (isGroup) {
+      final groupId = int.tryParse(data['group_id']?.toString() ?? '');
+      if (groupId != null) {
+        debugPrint('💾 FCM Background Sync: Syncing group $groupId...');
+        final messages = await GroupService.getMessages(
+          groupId: groupId,
+          offlineFirst: false,
+        ).timeout(const Duration(seconds: 10));
+
+        debugPrint('💾 FCM Background Sync: Prefetching media for group $groupId...');
+        await MediaPreloadService.instance.prefetchGroupMessages(
+          messages.take(20),
+        ).timeout(const Duration(seconds: 8));
+      }
+    } else {
+      final senderId = int.tryParse(data['sender_id']?.toString() ?? '');
+      if (senderId != null) {
+        debugPrint('💾 FCM Background Sync: Syncing conversation $senderId...');
+        final messages = await MessageService.getConversationMessages(
+          userId: senderId,
+          offlineFirst: false,
+        ).timeout(const Duration(seconds: 10));
+
+        debugPrint('💾 FCM Background Sync: Prefetching media for conversation $senderId...');
+        await MediaPreloadService.instance.prefetchMessages(
+          messages.take(20),
+        ).timeout(const Duration(seconds: 8));
+      }
+    }
+    debugPrint('💾 FCM Background Sync: Complete.');
+  } catch (e) {
+    debugPrint('💾 FCM Background Sync: Failed with error: $e');
+  }
+}
+
 /// Top-level function for background message handling
 /// This runs in a separate isolate when app is terminated/background
 @pragma('vm:entry-point')
@@ -429,6 +487,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     debugPrint(
       '📨 Android background chat notification delegated to native receiver',
     );
+    await _performBackgroundSync(data);
     return;
   }
 
@@ -498,6 +557,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       details,
       payload: jsonEncode(data),
     );
+  }
+
+  if (_isConversationNotificationEligible(data)) {
+    await _performBackgroundSync(data);
   }
 }
 

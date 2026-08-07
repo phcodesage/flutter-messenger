@@ -7,7 +7,8 @@ class ApiConfig {
   // The default keeps plain `flutter run` (without --dart-define-from-file) working.
   static const String baseUrl = String.fromEnvironment(
     'BASE_URL',
-    defaultValue: 'https://web.flask-call-app.site/'
+    //defaultValue: 'https://web.flask-call-app.site/'
+    defaultValue: 'https://banana.flask-meet.site/'
   );
 
   // API endpoints

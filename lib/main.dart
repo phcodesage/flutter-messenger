@@ -96,6 +96,17 @@ Future<Widget> _resolveInitialHome() async {
   // so chats can be opened — and viewed with images/videos — offline.
   unawaited(MediaPreloadService.instance.start());
 
+  // Warm every conversation while the native Flutter launch window is still
+  // visible. Android can recreate the process after the app has spent time in
+  // the background; an in-app splash here looked like an unexpected relaunch.
+  // Give the bulk request a short head start, then let it finish in the
+  // background if the connection is slow.
+  final startupPrefetch = PrefetchService.warmAll(full: true);
+  await Future.any<void>([
+    startupPrefetch.then<void>((_) {}),
+    Future<void>.delayed(const Duration(milliseconds: 2500)),
+  ]);
+
   // Prime Android Direct Share shortcuts from local cache so top-row
   // conversation targets are available even before lobby fully loads.
   final cachedUsers = await ChatCacheService.loadLobbyUsers(userId);

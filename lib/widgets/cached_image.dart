@@ -58,6 +58,16 @@ class CachedImage extends StatelessWidget {
     );
   }
 
+  /// Precache an image into memory so that it displays instantly when the widget is mounted.
+  static void precache(BuildContext context, String url, {int? cacheWidth}) {
+    if (url.isEmpty) return;
+    final ImageProvider provider = CachedNetworkImageProvider(url);
+    final ImageProvider finalProvider = cacheWidth != null
+        ? ResizeImage(provider, width: cacheWidth)
+        : provider;
+    precacheImage(finalProvider, context).catchError((_) => null);
+  }
+
   Widget _defaultErrorWidget() {
     return Container(
       color: const Color(0xFF1F2937),

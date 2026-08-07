@@ -75,7 +75,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   final SocketService _socketService = SocketService();
   final TextEditingController _messageController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
+  // A chronological (non-reversed) list otherwise paints at offset zero for
+  // one frame and only then jumps to maxScrollExtent. Starting beyond the
+  // eventual extent lets Flutter clamp to the bottom during the first layout,
+  // so opening a group never flashes its oldest messages first.
+  final ScrollController _scrollController = ScrollController(
+    initialScrollOffset: double.maxFinite,
+  );
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _inputFocusNode = FocusNode();
   final ScrollController _inputScrollController = ScrollController();
@@ -1038,6 +1044,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       final messages = await GroupService.getMessages(
         groupId: widget.group.id,
         limit: 50,
+        // The cache was already painted by _loadCachedGroupMessages. This call
+        // must reach the server; otherwise it just returns that same snapshot
+        // and the room can stay behind until another socket event arrives.
+        offlineFirst: false,
       );
 
       if (mounted) {
