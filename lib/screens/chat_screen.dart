@@ -5805,16 +5805,10 @@ class _ChatScreenState extends State<ChatScreen>
     final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
         ? ''
         : ' ';
-    // Inserting into an empty input adds a single trailing space so the next
-    // word is separated and the caret lands ready to type. Otherwise: no
-    // trailing space at the very end, and don't double up when the following
-    // text already starts with whitespace.
-    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
-    final spaceAfter = inputIsEmpty
-        ? ' '
-        : (after.isEmpty || RegExp(r'^\s').hasMatch(after))
-        ? ''
-        : ' ';
+    // Always leave a trailing space so the caret lands ready to type the next
+    // word, including at the very end of the input. Skip it only when the
+    // following text already starts with whitespace, to avoid doubling up.
+    final spaceAfter = RegExp(r'^\s').hasMatch(after) ? '' : ' ';
 
     final inserted = '$spaceBefore$firstName$spaceAfter';
     final newText = '$before$inserted$after';

@@ -9450,12 +9450,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
         ? ''
         : ' ';
-    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
-    final spaceAfter = inputIsEmpty
-        ? ' '
-        : (after.isEmpty || RegExp(r'^\s').hasMatch(after))
-        ? ''
-        : ' ';
+    // Always leave a trailing space so the next word can be typed immediately;
+    // skip it only when the following text already starts with whitespace.
+    final spaceAfter = RegExp(r'^\s').hasMatch(after) ? '' : ' ';
 
     final inserted = '$spaceBefore$nameToInsert$spaceAfter';
     final newText = '$before$inserted$after';
@@ -9634,10 +9631,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final spaceBefore = (before.isEmpty || RegExp(r'\s$').hasMatch(before))
         ? ''
         : ' ';
-    final bool inputIsEmpty = before.isEmpty && after.isEmpty;
-    final spaceAfter = inputIsEmpty
-        ? ' '
-        : ((after.isEmpty || RegExp(r'^\s').hasMatch(after)) ? '' : ' ');
+    // Always leave a trailing space so the next word can be typed immediately;
+    // skip it only when the following text already starts with whitespace.
+    final spaceAfter = RegExp(r'^\s').hasMatch(after) ? '' : ' ';
     final inserted = '$spaceBefore$raw$spaceAfter';
     final newText = '$before$inserted$after';
     final newCaret = start + inserted.length;
