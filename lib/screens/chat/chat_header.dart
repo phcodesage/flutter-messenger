@@ -109,7 +109,9 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
             ),
       titleSpacing: onBack == null ? 12 : 0,
       title: _isGroup ? _buildGroupTitle(s) : _buildUserTitle(s),
-      actions: _isGroup ? _buildGroupActions(context, isCompact, s) : _buildUserActions(context, isCompact, s),
+      actions: _isGroup
+          ? _buildGroupActions(context, isCompact, s)
+          : _buildUserActions(context, isCompact, s),
     );
   }
 
@@ -139,7 +141,12 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (!isSelfChat) _buildHeaderStatusPill(s),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!isSelfChat) Flexible(child: _buildHeaderStatusPill(s)),
+                  ],
+                ),
               ],
             ),
           ),
@@ -148,7 +155,11 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  List<Widget> _buildUserActions(BuildContext context, bool isCompact, double s) {
+  List<Widget> _buildUserActions(
+    BuildContext context,
+    bool isCompact,
+    double s,
+  ) {
     final List<Widget> actions = [];
 
     // 1. Call on other device OR Call buttons (if not self chat)
@@ -159,10 +170,7 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
           child: Center(
             child: Container(
               constraints: BoxConstraints(maxWidth: 140 * s),
-              padding: EdgeInsets.symmetric(
-                horizontal: 8 * s,
-                vertical: 4 * s,
-              ),
+              padding: EdgeInsets.symmetric(horizontal: 8 * s, vertical: 4 * s),
               decoration: BoxDecoration(
                 color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(999),
@@ -248,20 +256,24 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (memberCount != null)
-                  Padding(
-                    padding: EdgeInsets.only(top: 1 * s),
-                    child: Text(
-                      '$memberCount members',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 11.5 * s,
-                        fontWeight: FontWeight.w500,
-                        height: 1.12,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (memberCount != null)
+                      Flexible(
+                        child: Text(
+                          '$memberCount members',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            fontSize: 11.5 * s,
+                            fontWeight: FontWeight.w500,
+                            height: 1.12,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -302,7 +314,11 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  List<Widget> _buildGroupActions(BuildContext context, bool isCompact, double s) {
+  List<Widget> _buildGroupActions(
+    BuildContext context,
+    bool isCompact,
+    double s,
+  ) {
     final List<Widget> actions = [];
 
     // Prioritize Tasks and Excalidraw: always show directly in group header
@@ -453,7 +469,9 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
           ),
         );
       }
-      if (onShowMembers != null || onShowSettings != null || onExportChat != null) {
+      if (onShowMembers != null ||
+          onShowSettings != null ||
+          onExportChat != null) {
         actions.add(
           PopupMenuButton<String>(
             icon: Icon(Icons.more_vert, color: Colors.white, size: 24 * s),
@@ -498,7 +516,11 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
                   value: 'export',
                   child: Row(
                     children: [
-                      Icon(Icons.download_rounded, color: Colors.white, size: 20),
+                      Icon(
+                        Icons.download_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                       SizedBox(width: 12),
                       Text(
                         'Export Chat',
@@ -515,7 +537,6 @@ class ChatHeader extends StatelessWidget implements PreferredSizeWidget {
 
     return actions;
   }
-
 
   /// Avatar styled like the contacts list: colored background from the user's
   /// palette index, network image when present (fallback to initials on

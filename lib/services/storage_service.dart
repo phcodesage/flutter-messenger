@@ -75,6 +75,10 @@ class StorageService {
     await prefs.remove('$_securePrefsPrefix$key');
   }
 
+
+
+
+
   /// Reset cached state — for use in unit tests only.
   @visibleForTesting
   static void resetForTesting() {
@@ -569,7 +573,10 @@ class StorageService {
   }
 
   /// Increment forward frequency for a user
-  static Future<void> incrementForwardFrequency(int currentUserId, int userId) async {
+  static Future<void> incrementForwardFrequency(
+    int currentUserId,
+    int userId,
+  ) async {
     final key = 'fwd_freq_$currentUserId';
     try {
       final prefs = await _getPrefs();
@@ -583,22 +590,33 @@ class StorageService {
   }
 
   /// Save starred user IDs directly (overwrite cache)
-  static Future<void> saveStarredUserIds(int currentUserId, Set<int> starredIds) async {
+  static Future<void> saveStarredUserIds(
+    int currentUserId,
+    Set<int> starredIds,
+  ) async {
     final key = 'fwd_star_$currentUserId';
     try {
       final prefs = await _getPrefs();
-      await prefs.setStringList(key, starredIds.map((id) => id.toString()).toList());
+      await prefs.setStringList(
+        key,
+        starredIds.map((id) => id.toString()).toList(),
+      );
     } catch (e) {
       debugPrint('Error saving starred user IDs: $e');
     }
   }
 
   /// Save forward frequencies directly (overwrite cache)
-  static Future<void> saveForwardFrequencies(int currentUserId, Map<int, int> frequencies) async {
+  static Future<void> saveForwardFrequencies(
+    int currentUserId,
+    Map<int, int> frequencies,
+  ) async {
     final key = 'fwd_freq_$currentUserId';
     try {
       final prefs = await _getPrefs();
-      final rawJson = jsonEncode(frequencies.map((k, v) => MapEntry(k.toString(), v)));
+      final rawJson = jsonEncode(
+        frequencies.map((k, v) => MapEntry(k.toString(), v)),
+      );
       await prefs.setString(key, rawJson);
     } catch (e) {
       debugPrint('Error saving forward frequencies: $e');

@@ -204,15 +204,15 @@ class TextMessageRetryService {
           
           if (socketService.isConnected) {
             debugPrint('✉️ Socket is connected, sending via socket for real-time delivery');
-            socketService.sendMessage(
+            await socketService.sendMessage(
               recipientId: job.recipientId,
               content: job.content,
               messageType: 'text',
               replyToId: job.replyToId,
             );
             
-            // Socket emission is synchronous and fire-and-forget.
-            // Remove from queue immediately. chat_screen.dart will handle the 'messageSent' echo.
+            // Encryption completes before the socket emission. The chat screen
+            // handles the eventual messageSent echo.
             _queue.removeWhere((q) => q.optimisticId == job.optimisticId);
             await _persistQueue();
             debugPrint('✅ Successfully retried text message via socket ${job.optimisticId}');

@@ -107,9 +107,10 @@ class MessageService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final messages = (data['messages'] as List)
-            .map((json) => Message.fromJson(json))
-            .toList();
+        final messages = <Message>[];
+        for (final raw in data['messages'] as List) {
+          messages.add(Message.fromJson(Map<String, dynamic>.from(raw as Map)));
+        }
 
         // Sync cache with server response
         if (currentUserId != null) {
@@ -214,7 +215,7 @@ class MessageService {
 
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        return Message.fromJson(data['data']);
+        return Message.fromJson(Map<String, dynamic>.from(data['data'] as Map));
       } else if (response.statusCode == 401) {
         // Token expired - trigger auth error handler
         debugPrint('🔐 Token expired - redirecting to sign in');
@@ -443,7 +444,8 @@ class MessageService {
         StreamTransformer<List<int>, List<int>>.fromHandlers(
           handleData: (data, sink) {
             bytesSent += data.length;
-            if (bytesSent - lastReported >= reportInterval || bytesSent >= totalBytes) {
+            if (bytesSent - lastReported >= reportInterval ||
+                bytesSent >= totalBytes) {
               lastReported = bytesSent;
               onProgress?.call(bytesSent, totalBytes);
             }

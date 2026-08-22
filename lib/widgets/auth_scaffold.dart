@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'app_version_text.dart';
+import 'offline_banner.dart';
 
 /// Shared scaffold widget for authentication screens.
 ///
@@ -69,6 +70,12 @@ class AuthScaffold extends StatelessWidget {
                 },
               ),
             ),
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(child: OfflineBanner()),
+            ),
           ],
         ),
       ),
@@ -99,10 +106,7 @@ class _DesktopLayout extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          flex: 5,
-          child: _BrandingPanel(vScale: vScale),
-        ),
+        Expanded(flex: 5, child: _BrandingPanel(vScale: vScale)),
         Expanded(
           flex: 6,
           child: Container(
@@ -112,11 +116,7 @@ class _DesktopLayout extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: 480),
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: 48 * vScale),
-                  child: _FormCard(
-                    title: title,
-                    child: child,
-                    vScale: vScale,
-                  ),
+                  child: _FormCard(title: title, child: child, vScale: vScale),
                 ),
               ),
             ),
@@ -191,8 +191,8 @@ class _MobileLayout extends StatelessWidget {
     final scale = width < 360 || height < 680
         ? 0.88
         : (isCompactWidth || isCompactHeight)
-            ? 0.94
-            : 1.0;
+        ? 0.94
+        : 1.0;
     final horizontalPadding = (isCompactWidth ? 14.0 : 20.0) * scale;
     final verticalPadding = (isCompactHeight ? 14.0 : 24.0) * scale;
     final cardPadding = EdgeInsets.symmetric(
@@ -251,9 +251,9 @@ class _MobileLayout extends StatelessWidget {
               child: Theme(
                 data: scaledTheme,
                 child: MediaQuery(
-                  data: MediaQuery.of(context).copyWith(
-                    textScaler: TextScaler.linear(scale),
-                  ),
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(scale)),
                   child: Builder(
                     builder: (context) => Card(
                       color: AuthScaffold.card,
@@ -269,9 +269,7 @@ class _MobileLayout extends StatelessWidget {
                           children: [
                             Text(
                               title,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .headlineMedium
+                              style: Theme.of(context).textTheme.headlineMedium
                                   ?.copyWith(
                                     fontWeight: FontWeight.w700,
                                     color: Colors.white,
@@ -305,6 +303,7 @@ class _MobileLayout extends StatelessWidget {
 class _FormCard extends StatelessWidget {
   final String title;
   final Widget child;
+
   /// 0.6 – 1.0: compresses vertical rhythm when the window is short.
   final double vScale;
   final bool showVersion;
@@ -335,11 +334,11 @@ class _FormCard extends StatelessWidget {
             Text(
               title,
               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    // Slightly smaller title when very compressed
-                    fontSize: vScale < 0.75 ? 22 : null,
-                  ),
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                // Slightly smaller title when very compressed
+                fontSize: vScale < 0.75 ? 22 : null,
+              ),
             ),
             SizedBox(height: titleGap),
             // Pass vScale down so the child can compress its own gaps.
@@ -367,9 +366,7 @@ class AuthVScale extends InheritedWidget {
   /// Returns the current vertical scale factor (0.6–1.0).
   /// Falls back to 1.0 when not inside a desktop/medium layout (e.g. mobile).
   static double of(BuildContext context) {
-    return context
-            .dependOnInheritedWidgetOfExactType<AuthVScale>()
-            ?.vScale ??
+    return context.dependOnInheritedWidgetOfExactType<AuthVScale>()?.vScale ??
         1.0;
   }
 
@@ -431,19 +428,19 @@ class _BrandingPanel extends StatelessWidget {
               Text(
                 'Messenger',
                 style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                      fontSize: vScale < 0.75 ? 28 : null,
-                    ),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                  fontSize: vScale < 0.75 ? 28 : null,
+                ),
               ),
               SizedBox(height: gap2),
               Text(
                 'Stay connected with the\npeople who matter most.',
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.65),
-                      height: 1.6,
-                    ),
+                  color: Colors.white.withValues(alpha: 0.65),
+                  height: 1.6,
+                ),
               ),
               SizedBox(height: gap3),
               ..._features.map(

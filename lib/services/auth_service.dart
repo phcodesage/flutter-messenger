@@ -60,6 +60,7 @@ class AuthService {
         await StorageService.saveUsername(authResponse.user.username);
         await StorageService.saveIsAdmin(authResponse.user.isAdmin);
 
+
         // Initialize Socket.IO connection
         SocketService().initialize(authResponse.token, authResponse.user.id);
 
@@ -110,6 +111,7 @@ class AuthService {
   static Future<AuthResponse> login({
     required String username,
     required String password,
+    String? recoveryCode,
   }) async {
     try {
       final response = await http
@@ -128,6 +130,7 @@ class AuthService {
         await StorageService.saveUserId(authResponse.user.id);
         await StorageService.saveUsername(authResponse.user.username);
         await StorageService.saveIsAdmin(authResponse.user.isAdmin);
+
 
         // Initialize Socket.IO connection
         SocketService().initialize(authResponse.token, authResponse.user.id);

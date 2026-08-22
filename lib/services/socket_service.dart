@@ -42,7 +42,8 @@ class SocketService {
   final Map<String, Function(Map<String, dynamic>)>
   _messageStatusUpdatedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _messagesReadListeners = {};
-  final Map<String, Function(Map<String, dynamic>)> _unreadClearedListeners = {};
+  final Map<String, Function(Map<String, dynamic>)> _unreadClearedListeners =
+      {};
   final Map<String, Function(Map<String, dynamic>)> _colorChangedListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _colorResetListeners = {};
   final Map<String, Function(Map<String, dynamic>)>
@@ -82,8 +83,8 @@ class SocketService {
   final Map<String, Function(Map<String, dynamic>)> _callInitiatedListeners =
       {};
   final Map<String, Function(Map<String, dynamic>)> _callAnsweredListeners = {};
-  final Map<String, Function(Map<String, dynamic>)>
-  _callSessionStateListeners = {};
+  final Map<String, Function(Map<String, dynamic>)> _callSessionStateListeners =
+      {};
   final Map<String, Function(Map<String, dynamic>)>
   _callOfferStateSyncListeners = {};
   final Map<String, Function(Map<String, dynamic>)> _callDeclinedListeners = {};
@@ -134,8 +135,10 @@ class SocketService {
   final Map<String, Function(Map<String, dynamic>)> _aiChatSyncListeners = {};
 
   // Group call listeners
-  final Map<String, Function(Map<String, dynamic>)> _groupCallInvitationListeners = {};
-  final Map<String, Function(Map<String, dynamic>)> _groupCallCancelledListeners = {};
+  final Map<String, Function(Map<String, dynamic>)>
+  _groupCallInvitationListeners = {};
+  final Map<String, Function(Map<String, dynamic>)>
+  _groupCallCancelledListeners = {};
   // Raw event listeners — used by GroupCallService for mesh events
   final Map<String, Map<String, Function(dynamic)>> _rawEventListeners = {};
 
@@ -392,10 +395,12 @@ class SocketService {
             callback as Function(Map<String, dynamic>);
         break;
       case 'groupCallInvitation':
-        _groupCallInvitationListeners[key] = callback as Function(Map<String, dynamic>);
+        _groupCallInvitationListeners[key] =
+            callback as Function(Map<String, dynamic>);
         break;
       case 'groupCallCancelled':
-        _groupCallCancelledListeners[key] = callback as Function(Map<String, dynamic>);
+        _groupCallCancelledListeners[key] =
+            callback as Function(Map<String, dynamic>);
         break;
     }
   }
@@ -718,7 +723,7 @@ class SocketService {
   void _autoAcknowledgeDelivery(
     Map<String, dynamic> messageData, {
     required String source,
-  }) {
+  }) async {
     final messageId = _extractMessageId(messageData);
     if (messageId == null) return;
 
@@ -830,10 +835,10 @@ class SocketService {
   set onCallAnswered(Function(Map<String, dynamic>)? cb) => cb != null
       ? _callAnsweredListeners[_dk] = cb
       : _callAnsweredListeners.remove(_dk);
-    set onCallSessionState(Function(Map<String, dynamic>)? cb) => cb != null
+  set onCallSessionState(Function(Map<String, dynamic>)? cb) => cb != null
       ? _callSessionStateListeners[_dk] = cb
       : _callSessionStateListeners.remove(_dk);
-    set onCallOfferStateSync(Function(Map<String, dynamic>)? cb) => cb != null
+  set onCallOfferStateSync(Function(Map<String, dynamic>)? cb) => cb != null
       ? _callOfferStateSyncListeners[_dk] = cb
       : _callOfferStateSyncListeners.remove(_dk);
   set onCallDeclined(Function(Map<String, dynamic>)? cb) => cb != null
@@ -1038,7 +1043,9 @@ class SocketService {
     _socket!.onAny((event, data) {
       // Log AI sync and color-related events
       if (event.toString().contains('ai_chat_sync')) {
-        debugPrint('🔍 [SOCKET onAny] ai_chat_sync event arrived! data type: ${data.runtimeType}, data: $data');
+        debugPrint(
+          '🔍 [SOCKET onAny] ai_chat_sync event arrived! data type: ${data.runtimeType}, data: $data',
+        );
       } else if (event.toString().contains('color') ||
           event.toString().contains('group_color')) {
         debugPrint('🔍 [SOCKET DEBUG] Received event: $event with data: $data');
@@ -1046,7 +1053,9 @@ class SocketService {
       // Dispatch to raw event listeners (used by GroupCallService for mesh events)
       final rawListeners = _rawEventListeners[event.toString()];
       if (rawListeners != null && rawListeners.isNotEmpty) {
-        final payload = (data is Map) ? Map<String, dynamic>.from(data as Map) : <String, dynamic>{};
+        final payload = (data is Map)
+            ? Map<String, dynamic>.from(data as Map)
+            : <String, dynamic>{};
         for (final cb in rawListeners.values.toList()) {
           cb(payload);
         }
@@ -1132,14 +1141,15 @@ class SocketService {
     // Message events
     _socket!.on('new_message', (data) {
       debugPrint('💬 New message: $data');
-      final messageData = data as Map<String, dynamic>;
+      final messageData = Map<String, dynamic>.from(data as Map);
       _broadcast(_messageReceivedListeners, messageData);
       _autoAcknowledgeDelivery(messageData, source: 'chat');
     });
 
     _socket!.on('message_sent', (data) {
       debugPrint('📤 Message sent: $data');
-      _broadcast(_messageSentListeners, data as Map<String, dynamic>);
+      final messageData = Map<String, dynamic>.from(data as Map);
+      _broadcast(_messageSentListeners, messageData);
     });
 
     // Persistent call-log entry (declined / missed / answered) — server pushes
@@ -1294,8 +1304,9 @@ class SocketService {
 
     // Message edited event
     _socket!.on('message_edited', (data) {
-      debugPrint('✏️ Message edited: $data');
-      _broadcast(_messageEditedListeners, data as Map<String, dynamic>);
+      final decoded = Map<String, dynamic>.from(data as Map);
+      debugPrint('✏️ Message edited: $decoded');
+      _broadcast(_messageEditedListeners, decoded);
     });
 
     _socket!.on('messageEdited', (data) {
@@ -1477,7 +1488,10 @@ class SocketService {
     // New group message from another member
     _socket!.on('group_new_message', (data) {
       debugPrint('💬 Group new message: $data');
-      _broadcast(_groupNewMessageListeners, data as Map<String, dynamic>);
+      _broadcast(
+        _groupNewMessageListeners,
+        Map<String, dynamic>.from(data as Map),
+      );
 
       // Auto-acknowledge delivery
       final messageData = data;
@@ -1496,7 +1510,10 @@ class SocketService {
     // Group message sent confirmation (your own message)
     _socket!.on('group_message_sent', (data) {
       debugPrint('📤 Group message sent: $data');
-      _broadcast(_groupMessageSentListeners, data as Map<String, dynamic>);
+      _broadcast(
+        _groupMessageSentListeners,
+        Map<String, dynamic>.from(data as Map),
+      );
     });
 
     // Group file message received
@@ -1519,8 +1536,9 @@ class SocketService {
 
     // Group message edited
     _socket!.on('group_message_edited', (data) {
-      debugPrint('✏️ Group message edited: $data');
-      _broadcast(_groupMessageEditedListeners, data as Map<String, dynamic>);
+      final decoded = Map<String, dynamic>.from(data as Map);
+      debugPrint('✏️ Group message edited: $decoded');
+      _broadcast(_groupMessageEditedListeners, decoded);
     });
 
     // Group reaction updated
@@ -1599,7 +1617,9 @@ class SocketService {
 
     // AI chat realtime sync
     _socket!.on('ai_chat_sync', (data) {
-      debugPrint('\u{1f916} [AI SYNC] ai_chat_sync RAW data type: ${data.runtimeType}, data: $data');
+      debugPrint(
+        '\u{1f916} [AI SYNC] ai_chat_sync RAW data type: ${data.runtimeType}, data: $data',
+      );
       Map<String, dynamic>? payload;
       if (data is Map) {
         payload = Map<String, dynamic>.from(data);
@@ -1609,7 +1629,9 @@ class SocketService {
         debugPrint('\u{1f916} [AI SYNC] Unexpected data type, skipping');
         return;
       }
-      debugPrint('\u{1f916} [AI SYNC] ai_chat_sync received: action=${payload['action']}, session_id=${payload['session_id']}');
+      debugPrint(
+        '\u{1f916} [AI SYNC] ai_chat_sync received: action=${payload['action']}, session_id=${payload['session_id']}',
+      );
       _broadcast(_aiChatSyncListeners, payload);
     });
 
@@ -1742,12 +1764,12 @@ class SocketService {
   }
 
   /// Send a message via Socket.IO
-  void sendMessage({
+  Future<void> sendMessage({
     required int recipientId,
     required String content,
     String messageType = 'text',
     int? replyToId,
-  }) {
+  }) async {
     emit('send_message', {
       'recipient_id': recipientId,
       'content': content,
@@ -1803,8 +1825,15 @@ class SocketService {
   }
 
   /// Edit a message
-  void editMessage(int messageId, String newContent) {
-    emit('edit_message', {'message_id': messageId, 'content': newContent});
+  Future<void> editMessage(
+    int messageId,
+    int recipientId,
+    String newContent,
+  ) async {
+    emit('edit_message', {
+      'message_id': messageId,
+      'content': newContent,
+    });
   }
 
   /// Add message as task
@@ -1947,7 +1976,11 @@ class SocketService {
   }
 
   /// Edit a group message
-  void editGroupMessage(int messageId, int groupId, String newContent) {
+  Future<void> editGroupMessage(
+    int messageId,
+    int groupId,
+    String newContent,
+  ) async {
     emit('edit_group_message', {
       'message_id': messageId,
       'group_id': groupId,
@@ -2049,7 +2082,11 @@ class SocketService {
     emit('leave_group_call', {'room_id': roomId, 'username': username});
   }
 
-  void inviteToGroupCall(String roomId, List<int> inviteeIds, List<String> inviteeUsernames) {
+  void inviteToGroupCall(
+    String roomId,
+    List<int> inviteeIds,
+    List<String> inviteeUsernames,
+  ) {
     emit('invite_to_group_call', {
       'room_id': roomId,
       'invitees': inviteeIds,
@@ -2057,7 +2094,11 @@ class SocketService {
     });
   }
 
-  void respondToGroupCallInvitation(String roomId, int inviterId, String response) {
+  void respondToGroupCallInvitation(
+    String roomId,
+    int inviterId,
+    String response,
+  ) {
     emit('group_call_invitation_response', {
       'room_id': roomId,
       'inviter_id': inviterId,
@@ -2073,15 +2114,35 @@ class SocketService {
     emit('mesh_leave', {'roomId': roomId, 'peerId': peerId});
   }
 
-  void meshOffer(String roomId, String from, String to, Map<String, dynamic> sdp) {
+  void meshOffer(
+    String roomId,
+    String from,
+    String to,
+    Map<String, dynamic> sdp,
+  ) {
     emit('mesh_offer', {'roomId': roomId, 'from': from, 'to': to, 'sdp': sdp});
   }
 
-  void meshAnswer(String roomId, String from, String to, Map<String, dynamic> sdp) {
+  void meshAnswer(
+    String roomId,
+    String from,
+    String to,
+    Map<String, dynamic> sdp,
+  ) {
     emit('mesh_answer', {'roomId': roomId, 'from': from, 'to': to, 'sdp': sdp});
   }
 
-  void meshIce(String roomId, String from, String to, Map<String, dynamic> candidate) {
-    emit('mesh_ice', {'roomId': roomId, 'from': from, 'to': to, 'candidate': candidate});
+  void meshIce(
+    String roomId,
+    String from,
+    String to,
+    Map<String, dynamic> candidate,
+  ) {
+    emit('mesh_ice', {
+      'roomId': roomId,
+      'from': from,
+      'to': to,
+      'candidate': candidate,
+    });
   }
 }

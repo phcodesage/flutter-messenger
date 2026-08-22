@@ -59,9 +59,10 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
         if (!mounted) return;
 
         if (sharedItems.isNotEmpty) {
-          final directShareUserId = sharedItems
-              .map((item) => item.directShareUserId)
-              .firstWhere((id) => id != null, orElse: () => null) ??
+          final directShareUserId =
+              sharedItems
+                  .map((item) => item.directShareUserId)
+                  .firstWhere((id) => id != null, orElse: () => null) ??
               await ShareIntentService.instance.takePendingDirectShareUserId();
           final cachedUsers = await ChatCacheService.loadLobbyUsers(userId);
           if (!mounted) return;

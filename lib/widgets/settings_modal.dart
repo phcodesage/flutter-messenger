@@ -38,6 +38,7 @@ class _SettingsModalState extends State<SettingsModal> {
   String? _avatarUrl;
   bool _avatarBusy = false;
   bool _profileBusy = false;
+
   String? _profileMsg;
   bool _profileMsgIsError = false;
 

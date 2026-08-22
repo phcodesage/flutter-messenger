@@ -384,9 +384,12 @@ class GroupService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final messagesList = data['messages'] as List;
-        final messages = messagesList
-            .map((json) => GroupMessage.fromJson(json))
-            .toList();
+        final messages = <GroupMessage>[];
+        for (final raw in messagesList) {
+          messages.add(
+            GroupMessage.fromJson(Map<String, dynamic>.from(raw as Map)),
+          );
+        }
 
         debugPrint('✅ Loaded ${messages.length} messages for group $groupId');
 
@@ -479,7 +482,9 @@ class GroupService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        return GroupMessage.fromJson(data['data']);
+        return GroupMessage.fromJson(
+          Map<String, dynamic>.from(data['data'] as Map),
+        );
       } else {
         final error = jsonDecode(response.body);
         throw Exception(error['error'] ?? 'Failed to send message');

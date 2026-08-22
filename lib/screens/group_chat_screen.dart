@@ -295,7 +295,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   /// the text (including the clear() call on send) clears the draft
   /// immediately, which also undoes any prior "left with unsent text" bump.
   void _onComposerTextChangedForDraft() {
-    if (_editingMessage != null) return; // don't persist in-progress edits as a draft
+    if (_editingMessage != null)
+      return; // don't persist in-progress edits as a draft
     final roomKey = _draftRoomKey;
     final text = _messageController.text;
     _draftSaveDebounce?.cancel();
@@ -339,6 +340,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     });
     */
   }
+
 
   Future<void> _initialize() async {
     debugPrint(
@@ -591,7 +593,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 );
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: snackBar.backgroundColor ?? const Color(0xFF323232),
                   borderRadius: BorderRadius.circular(12),
@@ -1259,6 +1264,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (value is String) return int.tryParse(value);
     return null;
   }
+
   void _handleMessageStatusUpdate(Map<String, dynamic> data) {
     final messageId = _toInt(data['message_id']);
     final status = data['status'] as String?;
@@ -1286,13 +1292,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           }
 
           // Accumulate names
-          final List<String> updatedSeen = List<String>.from(message.seenByNames);
-          if (seenByName != null && seenByName.isNotEmpty && !updatedSeen.contains(seenByName)) {
+          final List<String> updatedSeen = List<String>.from(
+            message.seenByNames,
+          );
+          if (seenByName != null &&
+              seenByName.isNotEmpty &&
+              !updatedSeen.contains(seenByName)) {
             updatedSeen.add(seenByName);
           }
 
-          final List<String> updatedDelivered = List<String>.from(message.deliveredToNames);
-          if (deliveredByName != null && deliveredByName.isNotEmpty && !updatedDelivered.contains(deliveredByName)) {
+          final List<String> updatedDelivered = List<String>.from(
+            message.deliveredToNames,
+          );
+          if (deliveredByName != null &&
+              deliveredByName.isNotEmpty &&
+              !updatedDelivered.contains(deliveredByName)) {
             updatedDelivered.add(deliveredByName);
           }
 
@@ -1301,9 +1315,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             seenByNames: updatedSeen,
             deliveredToNames: updatedDelivered,
           );
-          
+
           // Persist cached group messages immediately so offline status matches
-          unawaited(ChatCacheService.saveGroupMessages(widget.group.id, _messages));
+          unawaited(
+            ChatCacheService.saveGroupMessages(widget.group.id, _messages),
+          );
         }
       });
     }
@@ -1366,7 +1382,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             'reactions': reactions,
           });
           // Persist the updated messages containing the new reactions to the local cache
-          unawaited(ChatCacheService.saveGroupMessages(widget.group.id, _messages));
+          unawaited(
+            ChatCacheService.saveGroupMessages(widget.group.id, _messages),
+          );
         }
       });
     }
@@ -2342,9 +2360,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (gm == null) return;
 
     final users = gm.reactions[emoji] as List? ?? [];
-    final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
-    final alreadyReacted = users.map((u) => u.toString()).any((u) =>
-        u == currentUserIdStr || (myName != null && u == myName));
+    final myName = _currentUserId != null
+        ? _memberNamesMap[_currentUserId]
+        : null;
+    final alreadyReacted = users
+        .map((u) => u.toString())
+        .any((u) => u == currentUserIdStr || (myName != null && u == myName));
 
     if (alreadyReacted) {
       debugPrint('👍 [GROUP] Clearing reaction $emoji on message $messageId');
@@ -2556,7 +2577,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                           shape: BoxShape.circle,
                                           boxShadow: [
                                             BoxShadow(
-                                              color: Colors.black.withOpacity(0.3),
+                                              color: Colors.black.withOpacity(
+                                                0.3,
+                                              ),
                                               blurRadius: 6,
                                               offset: const Offset(0, 2),
                                             ),
@@ -2784,80 +2807,89 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                ...msg.reactions.entries.where((e) {
-                  final list = e.value as List?;
-                  return list != null && list.isNotEmpty;
-                }).map((entry) {
-                  final emoji = entry.key;
-                  final users = entry.value as List;
-                  final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
-                  final iReacted = users.map((u) => u.toString()).any((u) =>
-                      u == currentUserStr || (myName != null && u == myName));
-                  final displayNames = users
-                      .map((id) => _resolveGroupReactorName(id.toString()))
-                      .toList();
-                  return GestureDetector(
-                    onTap: iReacted
-                        ? () {
-                            _toggleGroupReaction(messageId, emoji);
-                            Navigator.of(ctx).pop();
-                          }
-                        : null,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 8,
-                      ),
-                      margin: const EdgeInsets.only(bottom: 4),
-                      decoration: BoxDecoration(
-                        color: iReacted
-                            ? const Color(0xFF2A2A3E)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(
-                            _ensureColorEmoji(emoji),
-                            style: const TextStyle(
-                              fontSize: 24,
-                              fontFamilyFallback: [
-                                'Apple Color Emoji',
-                                'Android Emoji',
-                                'Noto Color Emoji',
-                              ],
-                            ),
+                ...msg.reactions.entries
+                    .where((e) {
+                      final list = e.value as List?;
+                      return list != null && list.isNotEmpty;
+                    })
+                    .map((entry) {
+                      final emoji = entry.key;
+                      final users = entry.value as List;
+                      final myName = _currentUserId != null
+                          ? _memberNamesMap[_currentUserId]
+                          : null;
+                      final iReacted = users
+                          .map((u) => u.toString())
+                          .any(
+                            (u) =>
+                                u == currentUserStr ||
+                                (myName != null && u == myName),
+                          );
+                      final displayNames = users
+                          .map((id) => _resolveGroupReactorName(id.toString()))
+                          .toList();
+                      return GestureDetector(
+                        onTap: iReacted
+                            ? () {
+                                _toggleGroupReaction(messageId, emoji);
+                                Navigator.of(ctx).pop();
+                              }
+                            : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 8,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  displayNames.join(', '),
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 14,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 2,
+                          margin: const EdgeInsets.only(bottom: 4),
+                          decoration: BoxDecoration(
+                            color: iReacted
+                                ? const Color(0xFF2A2A3E)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                _ensureColorEmoji(emoji),
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontFamilyFallback: [
+                                    'Apple Color Emoji',
+                                    'Android Emoji',
+                                    'Noto Color Emoji',
+                                  ],
                                 ),
-                                if (iReacted)
-                                  const Text(
-                                    'Tap to remove',
-                                    style: TextStyle(
-                                      color: Colors.redAccent,
-                                      fontSize: 11,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      displayNames.join(', '),
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 14,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 2,
                                     ),
-                                  ),
-                              ],
-                            ),
+                                    if (iReacted)
+                                      const Text(
+                                        'Tap to remove',
+                                        style: TextStyle(
+                                          color: Colors.redAccent,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
+                        ),
+                      );
+                    }),
               ],
             ),
           ),
@@ -2913,9 +2945,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     gm.reactions.forEach((emoji, usersList) {
       final users = usersList as List;
       if (users.isNotEmpty) {
-        final myName = _currentUserId != null ? _memberNamesMap[_currentUserId] : null;
-        final iReacted = users.map((u) => u.toString()).any((u) =>
-            u == currentUserStr || (myName != null && u == myName));
+        final myName = _currentUserId != null
+            ? _memberNamesMap[_currentUserId]
+            : null;
+        final iReacted = users
+            .map((u) => u.toString())
+            .any((u) => u == currentUserStr || (myName != null && u == myName));
         pills.add(
           GestureDetector(
             onTap: () => _showGroupReactorsSheet(messageId),
@@ -3047,9 +3082,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
 
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ExcalidrawBoardScreen(url: normalized),
-      ),
+      MaterialPageRoute(builder: (_) => ExcalidrawBoardScreen(url: normalized)),
     );
   }
 
@@ -4030,10 +4063,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Build audio player widget
   Widget _buildAudioPlayer(String audioUrl, {double? duration}) {
-    return _AudioMessagePlayer(
-      audioUrl: audioUrl,
-      initialDuration: duration,
-    );
+    return _AudioMessagePlayer(audioUrl: audioUrl, initialDuration: duration);
   }
 
   Widget _buildTypingIndicator() {
@@ -5915,19 +5945,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
         final RenderObject? ro = ctx.findRenderObject();
         if (ro != null && ro.attached) {
-          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(
+            ro,
+          );
           if (viewport != null) {
-            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
-            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
-            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
-            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double offsetLeading = viewport
+                .getOffsetToReveal(ro, 0.0)
+                .offset;
+            final double offsetTrailing = viewport
+                .getOffsetToReveal(ro, 1.0)
+                .offset;
+            final double minOffset = offsetLeading < offsetTrailing
+                ? offsetLeading
+                : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing
+                ? offsetLeading
+                : offsetTrailing;
             final double currentOffset = _scrollController.offset;
 
-            // Use a small safety margin of 5 pixels. If the item is larger than the viewport, 
-            // minOffset will be less than or equal to maxOffset, but if the margin makes the 
+            // Use a small safety margin of 5 pixels. If the item is larger than the viewport,
+            // minOffset will be less than or equal to maxOffset, but if the margin makes the
             // range invalid, we fall back to a 0 margin.
             final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
-            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+            if (currentOffset >= minOffset + margin &&
+                currentOffset <= maxOffset - margin) {
               // Already fully visible! Just return and flash.
               return;
             }
@@ -5967,17 +6008,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         final BuildContext ctx = _messageItemKeys[task.id]!.currentContext!;
         final RenderObject? ro = ctx.findRenderObject();
         if (ro != null && ro.attached) {
-          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(ro);
+          final RenderAbstractViewport? viewport = RenderAbstractViewport.of(
+            ro,
+          );
           if (viewport != null) {
-            final double offsetLeading = viewport.getOffsetToReveal(ro, 0.0).offset;
-            final double offsetTrailing = viewport.getOffsetToReveal(ro, 1.0).offset;
-            final double minOffset = offsetLeading < offsetTrailing ? offsetLeading : offsetTrailing;
-            final double maxOffset = offsetLeading > offsetTrailing ? offsetLeading : offsetTrailing;
+            final double offsetLeading = viewport
+                .getOffsetToReveal(ro, 0.0)
+                .offset;
+            final double offsetTrailing = viewport
+                .getOffsetToReveal(ro, 1.0)
+                .offset;
+            final double minOffset = offsetLeading < offsetTrailing
+                ? offsetLeading
+                : offsetTrailing;
+            final double maxOffset = offsetLeading > offsetTrailing
+                ? offsetLeading
+                : offsetTrailing;
             final double currentOffset = _scrollController.offset;
 
             // If already fully visible after the initial jump, we don't need a second adjustment jump!
             final double margin = (maxOffset - minOffset) > 10 ? 5.0 : 0.0;
-            if (currentOffset >= minOffset + margin && currentOffset <= maxOffset - margin) {
+            if (currentOffset >= minOffset + margin &&
+                currentOffset <= maxOffset - margin) {
               return;
             }
 
@@ -5999,13 +6051,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         // Sweep outward from the estimated jumpTarget first (since it's usually very close)
         final double step = 400;
         final double maxScroll = pos.maxScrollExtent;
-        
+
         final List<double> sweepOffsets = [jumpTarget];
         for (int i = 1; i <= 5; i++) {
           sweepOffsets.add(jumpTarget + i * step);
           sweepOffsets.add(jumpTarget - i * step);
         }
-        
+
         for (final double sweep in sweepOffsets) {
           if (!mounted) break;
           final double clamped = sweep.clamp(0.0, maxScroll);
@@ -6013,7 +6065,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           await WidgetsBinding.instance.endOfFrame;
           if (_messageItemKeys[task.id]?.currentContext != null) break;
         }
-        
+
         // Fallback: full sweep from 0 if still not found (highly unlikely)
         if (_messageItemKeys[task.id]?.currentContext == null && mounted) {
           double sweep = 0;
@@ -7145,284 +7197,313 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                     ),
                                   ),
                                   pinned.isEmpty
-                                ? Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 24,
-                                      ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Container(
-                                            width: 70,
-                                            height: 70,
-                                            decoration: BoxDecoration(
-                                              color: const Color(
-                                                0xFFF97316,
-                                              ).withValues(alpha: 0.16),
-                                              shape: BoxShape.circle,
+                                      ? Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 24,
                                             ),
-                                            child: const Icon(
-                                              Icons.draw,
-                                              color: Color(0xFFFB923C),
-                                              size: 34,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            'No pinned Excalidraw links',
-                                            style: TextStyle(
-                                              color: Colors.grey[300],
-                                              fontSize: 17,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            'Pin an Excalidraw link in chat to see it here',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              color: Colors.grey[500],
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  )
-                                : ListView.builder(
-                                    padding: const EdgeInsets.all(10),
-                                    // Nested in the modal's scroll view now.
-                                    shrinkWrap: true,
-                                    physics:
-                                        const NeverScrollableScrollPhysics(),
-                                    itemCount: pinned.length,
-                                    itemBuilder: (context, index) {
-                                      final m = pinned[index];
-                                      final content = m.content;
-                                      final orderNumber = index + 1;
-                                      final rawTitle =
-                                          (m.excalidrawTitle != null &&
-                                              m.excalidrawTitle!
-                                                  .trim()
-                                                  .isNotEmpty)
-                                          ? m.excalidrawTitle!.trim()
-                                          : '';
-                                      final cardTitle = rawTitle.isNotEmpty
-                                          ? rawTitle
-                                          : 'Link #$orderNumber';
-                                      final extractedUrl =
-                                          _extractExcalidrawUrl(content);
-                                      final displayText =
-                                          (extractedUrl ?? content)
-                                              .trim()
-                                              .isEmpty
-                                          ? 'Excalidraw link'
-                                          : (extractedUrl ?? content).trim();
-                                      final openLink = () {
-                                        Navigator.pop(context);
-                                        if (extractedUrl != null) {
-                                          _openExcalidrawUrl(extractedUrl);
-                                        }
-                                      };
-                                      return Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF252542),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
-                                            color: const Color(
-                                              0xFFF97316,
-                                            ).withValues(alpha: 0.45),
-                                          ),
-                                        ),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(12),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  const Icon(
-                                                    Icons.draw_outlined,
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Container(
+                                                  width: 70,
+                                                  height: 70,
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(
+                                                      0xFFF97316,
+                                                    ).withValues(alpha: 0.16),
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                  child: const Icon(
+                                                    Icons.draw,
                                                     color: Color(0xFFFB923C),
-                                                    size: 18,
-                                                  ),
-                                                  const SizedBox(width: 6),
-                                                  Expanded(
-                                                    child: Text(
-                                                      cardTitle,
-                                                      style: const TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 15,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 8),
-                                              GestureDetector(
-                                                onTap: openLink,
-                                                child: Text(
-                                                  displayText,
-                                                  style: const TextStyle(
-                                                    color: Color(0xFF93C5FD),
-                                                    fontSize: 14,
-                                                    height: 1.4,
-                                                    decoration: TextDecoration
-                                                        .underline,
-                                                    decorationColor: Color(
-                                                      0xFF93C5FD,
-                                                    ),
+                                                    size: 34,
                                                   ),
                                                 ),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                _formatPinnedAt(
-                                                  m.excalidrawPinnedAt,
-                                                ),
-                                                style: const TextStyle(
-                                                  color: Color(0xFFFBBF24),
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w600,
-                                                  height: 1.3,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 12),
-                                              Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: InkWell(
-                                                      onTap: openLink,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            8,
-                                                          ),
-                                                      child: Container(
-                                                        padding:
-                                                            const EdgeInsets.symmetric(
-                                                              vertical: 9,
-                                                            ),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(
-                                                            0xFF2563EB,
-                                                          ),
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                8,
-                                                              ),
-                                                        ),
-                                                        child: const Row(
-                                                          mainAxisAlignment:
-                                                              MainAxisAlignment
-                                                                  .center,
-                                                          children: [
-                                                            Icon(
-                                                              Icons.open_in_new,
-                                                              color:
-                                                                  Colors.white,
-                                                              size: 16,
-                                                            ),
-                                                            SizedBox(width: 6),
-                                                            Text(
-                                                              'Open',
-                                                              style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 14,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w600,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: InkWell(
-                                                      onTap: () async {
-                                                        await _toggleGroupExcalidrawPin(
-                                                          m,
-                                                        );
-                                                      },
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            8,
-                                                          ),
-                                                      child: Container(
-                                                        padding:
-                                                            const EdgeInsets.symmetric(
-                                                              vertical: 9,
-                                                            ),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(
-                                                            0xFFDC2626,
-                                                          ),
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                8,
-                                                              ),
-                                                        ),
-                                                        child: const Row(
-                                                          mainAxisAlignment:
-                                                              MainAxisAlignment
-                                                                  .center,
-                                                          children: [
-                                                            Icon(
-                                                              Icons
-                                                                  .push_pin_outlined,
-                                                              color:
-                                                                  Colors.white,
-                                                              size: 16,
-                                                            ),
-                                                            SizedBox(width: 6),
-                                                            Text(
-                                                              'Unpin',
-                                                              style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 14,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w600,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 10),
-                                              Center(
-                                                child: Text(
-                                                  '$orderNumber',
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
-                                                    fontSize: 22,
-                                                    fontWeight: FontWeight.w900,
-                                                    letterSpacing: 0.5,
+                                                const SizedBox(height: 16),
+                                                Text(
+                                                  'No pinned Excalidraw links',
+                                                  style: TextStyle(
+                                                    color: Colors.grey[300],
+                                                    fontSize: 17,
+                                                    fontWeight: FontWeight.w600,
                                                   ),
                                                 ),
-                                              ),
-                                            ],
+                                                const SizedBox(height: 6),
+                                                Text(
+                                                  'Pin an Excalidraw link in chat to see it here',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: Colors.grey[500],
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
+                                        )
+                                      : ListView.builder(
+                                          padding: const EdgeInsets.all(10),
+                                          // Nested in the modal's scroll view now.
+                                          shrinkWrap: true,
+                                          physics:
+                                              const NeverScrollableScrollPhysics(),
+                                          itemCount: pinned.length,
+                                          itemBuilder: (context, index) {
+                                            final m = pinned[index];
+                                            final content = m.content;
+                                            final orderNumber = index + 1;
+                                            final rawTitle =
+                                                (m.excalidrawTitle != null &&
+                                                    m.excalidrawTitle!
+                                                        .trim()
+                                                        .isNotEmpty)
+                                                ? m.excalidrawTitle!.trim()
+                                                : '';
+                                            final cardTitle =
+                                                rawTitle.isNotEmpty
+                                                ? rawTitle
+                                                : 'Link #$orderNumber';
+                                            final extractedUrl =
+                                                _extractExcalidrawUrl(content);
+                                            final displayText =
+                                                (extractedUrl ?? content)
+                                                    .trim()
+                                                    .isEmpty
+                                                ? 'Excalidraw link'
+                                                : (extractedUrl ?? content)
+                                                      .trim();
+                                            final openLink = () {
+                                              Navigator.pop(context);
+                                              if (extractedUrl != null) {
+                                                _openExcalidrawUrl(
+                                                  extractedUrl,
+                                                );
+                                              }
+                                            };
+                                            return Container(
+                                              margin: const EdgeInsets.only(
+                                                bottom: 10,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF252542),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                border: Border.all(
+                                                  color: const Color(
+                                                    0xFFF97316,
+                                                  ).withValues(alpha: 0.45),
+                                                ),
+                                              ),
+                                              child: Padding(
+                                                padding: const EdgeInsets.all(
+                                                  12,
+                                                ),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        const Icon(
+                                                          Icons.draw_outlined,
+                                                          color: Color(
+                                                            0xFFFB923C,
+                                                          ),
+                                                          size: 18,
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 6,
+                                                        ),
+                                                        Expanded(
+                                                          child: Text(
+                                                            cardTitle,
+                                                            style:
+                                                                const TextStyle(
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize: 15,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    GestureDetector(
+                                                      onTap: openLink,
+                                                      child: Text(
+                                                        displayText,
+                                                        style: const TextStyle(
+                                                          color: Color(
+                                                            0xFF93C5FD,
+                                                          ),
+                                                          fontSize: 14,
+                                                          height: 1.4,
+                                                          decoration:
+                                                              TextDecoration
+                                                                  .underline,
+                                                          decorationColor:
+                                                              Color(0xFF93C5FD),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      _formatPinnedAt(
+                                                        m.excalidrawPinnedAt,
+                                                      ),
+                                                      style: const TextStyle(
+                                                        color: Color(
+                                                          0xFFFBBF24,
+                                                        ),
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        height: 1.3,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 12),
+                                                    Row(
+                                                      children: [
+                                                        Expanded(
+                                                          child: InkWell(
+                                                            onTap: openLink,
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  8,
+                                                                ),
+                                                            child: Container(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    vertical: 9,
+                                                                  ),
+                                                              decoration: BoxDecoration(
+                                                                color:
+                                                                    const Color(
+                                                                      0xFF2563EB,
+                                                                    ),
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      8,
+                                                                    ),
+                                                              ),
+                                                              child: const Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                children: [
+                                                                  Icon(
+                                                                    Icons
+                                                                        .open_in_new,
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: 16,
+                                                                  ),
+                                                                  SizedBox(
+                                                                    width: 6,
+                                                                  ),
+                                                                  Text(
+                                                                    'Open',
+                                                                    style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          14,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w600,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 8,
+                                                        ),
+                                                        Expanded(
+                                                          child: InkWell(
+                                                            onTap: () async {
+                                                              await _toggleGroupExcalidrawPin(
+                                                                m,
+                                                              );
+                                                            },
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  8,
+                                                                ),
+                                                            child: Container(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    vertical: 9,
+                                                                  ),
+                                                              decoration: BoxDecoration(
+                                                                color:
+                                                                    const Color(
+                                                                      0xFFDC2626,
+                                                                    ),
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      8,
+                                                                    ),
+                                                              ),
+                                                              child: const Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                children: [
+                                                                  Icon(
+                                                                    Icons
+                                                                        .push_pin_outlined,
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: 16,
+                                                                  ),
+                                                                  SizedBox(
+                                                                    width: 6,
+                                                                  ),
+                                                                  Text(
+                                                                    'Unpin',
+                                                                    style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          14,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w600,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 10),
+                                                    Center(
+                                                      child: Text(
+                                                        '$orderNumber',
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 22,
+                                                          fontWeight:
+                                                              FontWeight.w900,
+                                                          letterSpacing: 0.5,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            );
+                                          },
                                         ),
-                                      );
-                                    },
-                                  ),
                                 ],
                               ),
                             ),
@@ -7585,7 +7666,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   },
                 ),
               // Edit option (for own text messages)
-              if (isSentByMe && message.messageType == 'text' && !message.isDeleted)
+              if (isSentByMe &&
+                  message.messageType == 'text' &&
+                  !message.isDeleted)
                 ListTile(
                   leading: const Icon(Icons.edit, color: Color(0xFF7C3AED)),
                   title: const Text(
@@ -7683,7 +7766,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   /// Send edited group message via socket and API fallback
   void _editGroupMessage(GroupMessage message, String newContent) {
-    _socketService.editGroupMessage(message.id, widget.group.id, newContent);
+    unawaited(
+      _socketService.editGroupMessage(message.id, widget.group.id, newContent),
+    );
     GroupService.editMessage(
       groupId: widget.group.id,
       messageId: message.id,
@@ -8012,21 +8097,29 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       child: Stack(
                                         children: [
                                           CircleAvatar(
-                                            backgroundColor: _getAvatarColor(user.avatarColorIndex),
+                                            backgroundColor: _getAvatarColor(
+                                              user.avatarColorIndex,
+                                            ),
                                             radius: 20,
-                                            child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
+                                            child:
+                                                user.avatarUrl != null &&
+                                                    user.avatarUrl!.isNotEmpty
                                                 ? ClipOval(
                                                     child: CachedImage(
                                                       url: user.avatarUrl!,
                                                       width: 40,
                                                       height: 40,
                                                       fit: BoxFit.cover,
-                                                      placeholderColor: _getAvatarColor(user.avatarColorIndex),
+                                                      placeholderColor:
+                                                          _getAvatarColor(
+                                                            user.avatarColorIndex,
+                                                          ),
                                                       errorWidget: Text(
                                                         user.initials,
                                                         style: const TextStyle(
                                                           color: Colors.white,
-                                                          fontWeight: FontWeight.bold,
+                                                          fontWeight:
+                                                              FontWeight.bold,
                                                         ),
                                                       ),
                                                     ),
@@ -8035,7 +8128,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                     user.initials,
                                                     style: const TextStyle(
                                                       color: Colors.white,
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
                                                     ),
                                                   ),
                                           ),
@@ -8049,11 +8143,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                                 color: user.isOnline
                                                     ? const Color(0xFF00E676)
                                                     : (user.status == 'away'
-                                                        ? const Color(0xFFFFC107)
-                                                        : Colors.grey[600]!),
+                                                          ? const Color(
+                                                              0xFFFFC107,
+                                                            )
+                                                          : Colors.grey[600]!),
                                                 shape: BoxShape.circle,
                                                 border: Border.all(
-                                                  color: const Color(0xFF1E1E2E),
+                                                  color: const Color(
+                                                    0xFF1E1E2E,
+                                                  ),
                                                   width: 2,
                                                 ),
                                               ),
@@ -8073,21 +8171,29 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                       children: [
                                         Text(
                                           '@${user.username}',
-                                          style: TextStyle(color: Colors.grey[400]),
+                                          style: TextStyle(
+                                            color: Colors.grey[400],
+                                          ),
                                         ),
                                         const SizedBox(width: 8),
                                         Text(
                                           '•',
-                                          style: TextStyle(color: Colors.grey[500]),
+                                          style: TextStyle(
+                                            color: Colors.grey[500],
+                                          ),
                                         ),
                                         const SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            user.isOnline 
-                                                ? 'online' 
-                                                : _formatRelativeTime(user.lastSeen),
+                                            user.isOnline
+                                                ? 'online'
+                                                : _formatRelativeTime(
+                                                    user.lastSeen,
+                                                  ),
                                             style: TextStyle(
-                                              color: user.isOnline ? const Color(0xFF00E676) : Colors.grey[400],
+                                              color: user.isOnline
+                                                  ? const Color(0xFF00E676)
+                                                  : Colors.grey[400],
                                               fontSize: 12,
                                             ),
                                             overflow: TextOverflow.ellipsis,
@@ -8095,10 +8201,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                                         ),
                                         if (isAdmin) ...[
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
                                             decoration: BoxDecoration(
-                                              color: const Color(0xFF7C3AED).withAlpha(100),
-                                              borderRadius: BorderRadius.circular(4),
+                                              color: const Color(
+                                                0xFF7C3AED,
+                                              ).withAlpha(100),
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
                                             ),
                                             child: const Text(
                                               'Admin',
@@ -8831,8 +8943,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-
-
   /// Copy group message to clipboard
   void _copyGroupMessageToClipboard(GroupMessage message) {
     Clipboard.setData(ClipboardData(text: message.content));
@@ -9023,18 +9133,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     try {
       final currentUserId = await StorageService.getUserId();
       final currentUserName = await StorageService.getUsername() ?? 'Someone';
-      
+
       final content = ChatExporter.formatChatExport(
         messages: _messages,
         currentUserId: currentUserId ?? 0,
         currentUserName: currentUserName,
       );
-      
-      final filename = 'chat_export_group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}.txt';
-      
-      _showTopSnackBar(
-        const SnackBar(content: Text('Exporting chat...')),
-      );
+
+      final filename =
+          'chat_export_group_${widget.group.id}_${DateTime.now().millisecondsSinceEpoch}.txt';
+
+      _showTopSnackBar(const SnackBar(content: Text('Exporting chat...')));
 
       final path = await FileSaver.saveFile(
         filename: filename,
@@ -9044,9 +9153,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       if (mounted) {
         _showTopSnackBar(
           SnackBar(
-            content: Text(path == 'browser_download' 
-                ? 'Chat exported successfully (check downloads)'
-                : 'Chat exported and saved to downloads'),
+            content: Text(
+              path == 'browser_download'
+                  ? 'Chat exported successfully (check downloads)'
+                  : 'Chat exported and saved to downloads',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -9061,7 +9172,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     } catch (e) {
       if (mounted) {
         _showTopSnackBar(
-          SnackBar(content: Text('Failed to export chat: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Failed to export chat: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -9364,8 +9478,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _hideMentionOverlay();
 
     final RenderBox button = context.findRenderObject() as RenderBox;
-    final RenderBox overlay = Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
-    
+    final RenderBox overlay =
+        Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+
     final buttonOffset = button.localToGlobal(Offset.zero, ancestor: overlay);
 
     _mentionOverlayEntry = OverlayEntry(
@@ -9375,9 +9490,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             GestureDetector(
               onTap: _hideMentionOverlay,
               behavior: HitTestBehavior.translucent,
-              child: Container(
-                color: Colors.transparent,
-              ),
+              child: Container(color: Colors.transparent),
             ),
             Positioned(
               left: buttonOffset.dx,
@@ -9478,10 +9591,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 _insertMentionName(otherMembers.first);
               }
             },
-            onLongPress: otherMembers.isEmpty ? null : () {
-              HapticFeedback.mediumImpact();
-              _showMentionOverlay(context, otherMembers);
-            },
+            onLongPress: otherMembers.isEmpty
+                ? null
+                : () {
+                    HapticFeedback.mediumImpact();
+                    _showMentionOverlay(context, otherMembers);
+                  },
             borderRadius: BorderRadius.circular(8),
             child: Container(
               height: 40,
@@ -9503,7 +9618,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ),
           ),
         );
-      }
+      },
     );
   }
 
@@ -9732,7 +9847,9 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
   void initState() {
     super.initState();
     if (widget.initialDuration != null && widget.initialDuration! > 0) {
-      _duration = Duration(milliseconds: (widget.initialDuration! * 1000).round());
+      _duration = Duration(
+        milliseconds: (widget.initialDuration! * 1000).round(),
+      );
     }
     _setupAudioPlayer();
   }
@@ -9763,7 +9880,9 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
   Future<void> _probeAudioSource() async {
     try {
       Source source;
-      final cached = await DefaultCacheManager().getFileFromCache(widget.audioUrl);
+      final cached = await DefaultCacheManager().getFileFromCache(
+        widget.audioUrl,
+      );
       if (cached != null) {
         source = DeviceFileSource(cached.file.path);
       } else {
